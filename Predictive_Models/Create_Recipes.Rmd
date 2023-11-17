@@ -1,0 +1,359 @@
+---
+title: "Create_Recipes"
+output: html_document
+date: "2022-10-24"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidymodels)
+library(tidyverse)
+library(here)
+
+#okay, really need to set this to complete cases for all weather variables. step_naomit DOES NOT WORK.
+
+RC_train <- read_csv("RC_pred_highfreq_training.csv")|>
+  drop_na(Depth_m,Cloud_cov_fraction,DewPoint_C,AirTemp_C,Pressure_hPa, WWind_m.s,SWind_m.s)
+
+RC_all_rec <- read_csv("RC_pred_alldata.csv")
+```
+
+# Data preprocessing - "feature engineering"
+
+Data pre-processing is done in the tidymodels framework with 'recipes', which take the data and tidily change variables (e.g., log transformations, creating dummy variables) as we need to in preparation for putting the data into specific models. 
+
+What we really want is for linear regression to have separate models using different lags. For now, we'll just test a full model. 
+
+For the first of these recipes, we'll tell the recipe our model formula is all variables, remove two of the variables we don't want to use as predictors, and create lags on our predictor variables because we assume that lagged versions of our predictors could be important.
+
+
+
+```{r}
+#created lagged database - there is no good way to do this (basically,grouped lagging) within recipes
+rec_lags <- RC_all_rec|>
+  group_by(Depth_m)|>
+  arrange(Datetime)|>
+  mutate(across(c(WaterTemp_C,Cloud_cov_fraction,DewPoint_C,AirTemp_C,Pressure_hPa, WWind_m.s,SWind_m.s), ~lag(., n = 1L), .names = "{.col}_lag2hr"),
+         across(c(WaterTemp_C,Cloud_cov_fraction,DewPoint_C,AirTemp_C,Pressure_hPa, WWind_m.s,SWind_m.s), ~lag(., n = 3L), .names = "{.col}_lag6hr"),
+         across(c(WaterTemp_C,Cloud_cov_fraction,DewPoint_C,AirTemp_C,Pressure_hPa, WWind_m.s,SWind_m.s), ~lag(., n = 6L), .names = "{.col}_lag12hr"),
+         across(c(WaterTemp_C,Cloud_cov_fraction,DewPoint_C,AirTemp_C,Pressure_hPa, WWind_m.s,SWind_m.s), ~lag(., n = 12L), .names = "{.col}_lag24hr"),
+         across(c(WaterTemp_C,Cloud_cov_fraction,DewPoint_C,AirTemp_C,Pressure_hPa, WWind_m.s,SWind_m.s), ~lag(., n = 18L), .names = "{.col}_lag36hr"),
+         across(c(WaterTemp_C,Cloud_cov_fraction,DewPoint_C,AirTemp_C,Pressure_hPa, WWind_m.s,SWind_m.s), ~lag(., n = 24L), .names = "{.col}_lag48hr"),
+         across(c(WaterTemp_C,Cloud_cov_fraction,DewPoint_C,AirTemp_C,Pressure_hPa, WWind_m.s,SWind_m.s), ~lag(., n = 36L), .names = "{.col}_lag72hr"))|>
+  mutate(validation_period = if_else(!is.na(val_period), "testing", "training"))
+
+
+```
+
+Regression/LASSO recipes
+
+```{r}
+
+rec_testing<-rec_lags|>filter(!is.na(val_period))
+rec_training<-rec_lags|>filter(is.na(val_period))
+rec_split <- make_splits(x=rec_training,assessment = rec_testing)
+
+rec_reg_lag0 <- recipe(DO_mg.L ~ ., data = rec_training)|>
+  step_select(-validation_period, -val_period,-Datetime)|>
+  step_select(DO_mg.L, doy, Depth_m, hour_of_day,WaterTemp_C,Cloud_cov_fraction,DewPoint_C,AirTemp_C,Pressure_hPa, WWind_m.s,SWind_m.s,skip = TRUE)|>
+  step_normalize(all_numeric(), -all_outcomes())
+
+rec_reg_lag2 <- recipe(DO_mg.L ~ ., data = rec_training)|>
+  step_select(-Datetime, -val_period,-validation_period, skip = TRUE)|>
+  step_select(DO_mg.L,doy,Depth_m,hour_of_day,contains("lag2hr"),skip = TRUE)|>
+  step_normalize(all_numeric(), -all_outcomes())
+
+rec_reg_lag6 <- recipe(DO_mg.L ~ ., data = rec_training)|>
+  step_select(-Datetime, -val_period,-validation_period, skip = TRUE)|>
+  step_select(DO_mg.L,doy,Depth_m,hour_of_day,contains("lag6hr"),skip = TRUE)|>
+  step_normalize(all_numeric(), -all_outcomes())
+
+rec_reg_lag12 <- recipe(DO_mg.L ~ ., data = rec_training)|>
+  step_select(-Datetime, -val_period,-validation_period, skip = TRUE)|>
+  step_select(DO_mg.L,doy,Depth_m,hour_of_day,contains("lag12hr"),skip = TRUE)|>
+  step_normalize(all_numeric(), -all_outcomes())
+
+rec_reg_lag24 <- recipe(DO_mg.L ~ ., data = rec_training)|>
+  step_select(-Datetime, -val_period,-validation_period, skip = TRUE)|>
+  step_select(DO_mg.L,doy,Depth_m,hour_of_day,contains("lag24hr"),skip = TRUE)|>
+  step_normalize(all_numeric(), -all_outcomes())
+
+rec_reg_lag48 <- recipe(DO_mg.L ~ ., data = rec_training)|>
+  step_select(-Datetime, -val_period,-validation_period, skip = TRUE)|>
+  step_select(DO_mg.L,doy,Depth_m,hour_of_day,contains("lag48hr"),skip = TRUE)|>
+  step_normalize(all_numeric(), -all_outcomes())
+
+rec_reg_lag72 <- recipe(DO_mg.L ~ ., data = rec_training)|>
+  step_select(-Datetime, -val_period,-validation_period, skip = TRUE)|>
+  step_select(DO_mg.L,doy,Depth_m,hour_of_day,contains("lag72hr"),skip = TRUE)|>
+  step_normalize(all_numeric(), -all_outcomes())
+
+rec_reg_intlag0 <- recipe(DO_mg.L ~ ., data = rec_training)|>
+  step_select(-validation_period, -val_period,-Datetime)|>
+  step_select(DO_mg.L, doy, Depth_m, hour_of_day,WaterTemp_C,Cloud_cov_fraction,DewPoint_C,AirTemp_C,Pressure_hPa, WWind_m.s,SWind_m.s,skip = TRUE)|>
+  step_interact(terms = ~Depth_m*hour_of_day*(WaterTemp_C+Pressure_hPa+Cloud_cov_fraction+AirTemp_C+WWind_m.s+SWind_m.s+DewPoint_C))|>
+  step_normalize(all_numeric(), -all_outcomes())
+
+rec_reg_intlag2 <- recipe(DO_mg.L ~ ., data = rec_training)|>
+  step_select(-Datetime, -val_period,-validation_period, skip = TRUE)|>
+  step_select(DO_mg.L,doy,Depth_m,hour_of_day,contains("lag2hr"),skip = TRUE)|>
+  step_interact(terms = ~Depth_m*hour_of_day*(contains("lag")))|>
+  step_normalize(all_numeric(), -all_outcomes())
+
+rec_reg_intlag6 <- recipe(DO_mg.L ~ ., data = rec_training)|>
+  step_select(-Datetime, -val_period,-validation_period, skip = TRUE)|>
+  step_select(DO_mg.L,doy,Depth_m,hour_of_day,contains("lag6hr"),skip = TRUE)|>
+  step_interact(terms = ~Depth_m*hour_of_day*(contains("lag")))|>
+  step_normalize(all_numeric(), -all_outcomes())
+
+rec_reg_intlag12 <- recipe(DO_mg.L ~ ., data = rec_training)|>
+  step_select(-Datetime, -val_period,-validation_period, skip = TRUE)|>
+  step_select(DO_mg.L,doy,Depth_m,hour_of_day,contains("lag12hr"),skip = TRUE)|>
+  step_interact(terms = ~Depth_m*hour_of_day*(contains("lag")))|>
+  step_normalize(all_numeric(), -all_outcomes())
+
+rec_reg_intlag24 <- recipe(DO_mg.L ~ ., data = rec_training)|>
+  step_select(-Datetime, -val_period,-validation_period, skip = TRUE)|>
+  step_select(DO_mg.L,doy,Depth_m,hour_of_day,contains("lag24hr"),skip = TRUE)|>
+  step_interact(terms = ~Depth_m*hour_of_day*(contains("lag")))|>
+  step_normalize(all_numeric(), -all_outcomes())
+
+rec_reg_intlag48 <- recipe(DO_mg.L ~ ., data = rec_training)|>
+  step_select(-Datetime, -val_period,-validation_period, skip = TRUE)|>
+  step_select(DO_mg.L,doy,Depth_m,hour_of_day,contains("lag48hr"),skip = TRUE)|>
+  step_interact(terms = ~Depth_m*hour_of_day*(contains("lag")))|>
+  step_normalize(all_numeric(), -all_outcomes())
+
+rec_reg_intlag72 <- recipe(DO_mg.L ~ ., data = rec_training)|>
+  step_select(-Datetime, -val_period,-validation_period, skip = TRUE)|>
+  step_select(DO_mg.L,doy,Depth_m,hour_of_day,contains("lag72hr"),skip = TRUE)|>
+  step_interact(terms = ~Depth_m*hour_of_day*(contains("lag")))|>
+  step_normalize(all_numeric(), -all_outcomes())
+
+recipes_list<-list("lag0"=rec_reg_lag0,"lag2"=rec_reg_lag2,"lag6"=rec_reg_lag6,"lag12"=rec_reg_lag12,"lag24"=rec_reg_lag24,"lag48"=rec_reg_lag48,"lag72"=rec_reg_lag72,
+                   "intlag0"=rec_reg_intlag0,"intlag2"=rec_reg_intlag2,"intlag6"=rec_reg_intlag6,"intlag12"=rec_reg_intlag12,"intlag24"=rec_reg_intlag24,"intlag48"=rec_reg_intlag48,"intlag72"=rec_reg_intlag72)
+```
+
+Random forest recipes
+```{r additive recipes}
+#no lag
+
+lag0_df<- rec_lags|>
+  select(doy, hour_of_day, Depth_m, DO_mg.L, val_period, validation_period,Datetime,WaterTemp_C,Cloud_cov_fraction,DewPoint_C,AirTemp_C,Pressure_hPa, WWind_m.s,SWind_m.s)|>
+  drop_na(DO_mg.L,WaterTemp_C,Cloud_cov_fraction,DewPoint_C,AirTemp_C,Pressure_hPa, WWind_m.s,SWind_m.s)
+
+lag0_split <- initial_split(lag0_df) 
+lag0_split$in_id <- which(lag0_df$validation_period == "training")
+lag0_training <- training(lag0_split)
+lag0_testing <- testing(lag0_split)
+
+rec_lag0<-recipe(DO_mg.L ~ ., data = lag0_training)|>
+  step_select(-validation_period, -val_period,-Datetime,skip = TRUE)|>
+    step_normalize(all_numeric(), -all_outcomes())
+
+# Lag 2 hours
+lag2_df<- rec_lags|>
+  select(doy, hour_of_day, Depth_m, DO_mg.L, val_period, validation_period,Datetime,contains("lag2hr"))|>
+  drop_na(DO_mg.L,contains("lag"))
+
+lag2_split <- initial_split(lag2_df) 
+lag2_split$in_id <- which(lag2_df$validation_period == "training")
+lag2_training <- training(lag2_split)
+lag2_testing <- testing(lag2_split)
+
+rec_lag2<-recipe(DO_mg.L ~ ., data = lag2_training)|>
+  step_select(-validation_period, -val_period,-Datetime,skip = TRUE)|>
+    step_normalize(all_numeric(), -all_outcomes())
+
+# Lag 6 hours
+lag6_df<- rec_lags|>
+  select(doy, hour_of_day, Depth_m, DO_mg.L, val_period, validation_period,Datetime,contains("lag6hr"))|>
+  drop_na(DO_mg.L,contains("lag"))
+
+lag6_split <- initial_split(lag6_df) 
+lag6_split$in_id <- which(lag6_df$validation_period == "training")
+lag6_training <- training(lag6_split)
+lag6_testing <- testing(lag6_split)
+
+rec_lag6<-recipe(DO_mg.L ~ ., data = lag6_training)|>
+  step_select(-validation_period, -val_period,-Datetime,skip = TRUE)|>
+  step_normalize(all_numeric(), -all_outcomes())
+
+# Lag 12 hours
+lag12_df<- rec_lags|>
+  select(doy, hour_of_day, Depth_m, DO_mg.L, val_period, validation_period,Datetime,contains("lag12hr"))|>
+  drop_na(DO_mg.L,contains("lag"))
+
+lag12_split <- initial_split(lag12_df) 
+lag12_split$in_id <- which(lag12_df$validation_period == "training")
+lag12_training <- training(lag12_split)
+lag12_testing <- testing(lag12_split)
+
+rec_lag12<-recipe(DO_mg.L ~ ., data = lag12_training)|>
+  step_select(-validation_period, -val_period,-Datetime,skip = TRUE)|>
+  step_normalize(all_numeric(), -all_outcomes())
+
+# Lag 24 hours
+lag24_df<- rec_lags|>
+  select(doy, hour_of_day, Depth_m, DO_mg.L, val_period, validation_period,Datetime,contains("lag24hr"))|>
+  drop_na(DO_mg.L,contains("lag"))
+
+lag24_split <- initial_split(lag24_df) 
+lag24_split$in_id <- which(lag24_df$validation_period == "training")
+lag24_training <- training(lag24_split)
+lag24_testing <- testing(lag24_split)
+
+rec_lag24<-recipe(DO_mg.L ~ ., data = lag24_training)|>
+  step_select(-validation_period, -val_period,-Datetime,skip = TRUE)|>
+  step_normalize(all_numeric(), -all_outcomes())
+
+# Lag 48 hours
+lag48_df<- rec_lags|>
+  select(doy, hour_of_day, Depth_m, DO_mg.L, val_period, validation_period,Datetime,contains("lag48hr"))|>
+  drop_na(DO_mg.L,contains("lag"))
+
+lag48_split <- initial_split(lag48_df) 
+lag48_split$in_id <- which(lag48_df$validation_period == "training")
+lag48_training <- training(lag48_split)
+lag48_testing <- testing(lag48_split)
+
+rec_lag48<-recipe(DO_mg.L ~ ., data = lag48_training)|>
+  step_select(-validation_period, -val_period,-Datetime,skip = TRUE)|>
+  step_normalize(all_numeric(), -all_outcomes())
+# Lag 72 hours
+lag72_df<- rec_lags|>
+  select(doy, hour_of_day, Depth_m, DO_mg.L, val_period, validation_period,Datetime,contains("lag72hr"))|>
+  drop_na(DO_mg.L,contains("lag"))
+
+lag72_split <- initial_split(lag72_df) 
+lag72_split$in_id <- which(lag72_df$validation_period == "training")
+lag72_training <- training(lag72_split)
+lag72_testing <- testing(lag72_split)
+
+rec_lag72<-recipe(DO_mg.L ~ ., data = lag72_training)|>
+  step_select(-validation_period, -val_period,-Datetime,skip = TRUE)|>
+  step_normalize(all_numeric(), -all_outcomes())
+
+
+```
+
+```{r interaction recipes}
+
+#no lag
+
+lag0_int_df<- rec_lags|>
+  select(doy, hour_of_day, Depth_m, DO_mg.L, val_period, validation_period,Datetime,WaterTemp_C,Cloud_cov_fraction,DewPoint_C,AirTemp_C,Pressure_hPa, WWind_m.s,SWind_m.s)|>
+  drop_na(DO_mg.L,WaterTemp_C,Cloud_cov_fraction,DewPoint_C,AirTemp_C,Pressure_hPa, WWind_m.s,SWind_m.s)
+
+lag0_int_split <- initial_split(lag0_int_df) 
+lag0_int_split$in_id <- which(lag0_int_df$validation_period == "training")
+lag0_int_training <- training(lag0_int_split)
+lag0_int_testing <- testing(lag0_int_split)
+
+rec_int_lag0<-recipe(DO_mg.L ~ ., data = lag0_int_training)|>
+  step_select(-validation_period, -val_period,-Datetime,skip = TRUE)|>
+  step_interact(terms = ~Depth_m*hour_of_day*(WaterTemp_C+Pressure_hPa+Cloud_cov_fraction+AirTemp_C+WWind_m.s+SWind_m.s+DewPoint_C))|>
+  step_normalize(all_numeric(), -all_outcomes())
+
+# Lag 2 hours
+lag2_int_df<- rec_lags|>
+  select(doy, hour_of_day, Depth_m, DO_mg.L, val_period, validation_period,Datetime,contains("lag2hr"))|>
+  drop_na(DO_mg.L,contains("lag"))
+
+lag2_int_split <- initial_split(lag2_int_df) 
+lag2_int_split$in_id <- which(lag2_int_df$validation_period == "training")
+lag2_int_training <- training(lag2_int_split)
+lag2_int_testing <- testing(lag2_int_split)
+
+rec_int_lag2<-recipe(DO_mg.L ~ ., data = lag2_int_training)|>
+  step_select(-validation_period, -val_period,-Datetime,skip = TRUE)|>
+  step_interact(terms = ~Depth_m*hour_of_day*(contains("lag")))|>
+  step_normalize(all_numeric(), -all_outcomes())
+
+# Lag 6 hours
+lag6_int_df<- rec_lags|>
+  select(doy, hour_of_day, Depth_m, DO_mg.L, val_period, validation_period,Datetime,contains("lag6hr"))|>
+  drop_na(DO_mg.L,contains("lag"))
+
+lag6_int_split <- initial_split(lag6_int_df) 
+lag6_int_split$in_id <- which(lag6_int_df$validation_period == "training")
+lag6_int_training <- training(lag6_int_split)
+lag6_int_testing <- testing(lag6_int_split)
+
+rec_int_lag6<-recipe(DO_mg.L ~ ., data = lag6_int_training)|>
+  step_select(-validation_period, -val_period,-Datetime,skip = TRUE)|>
+  step_interact(terms = ~Depth_m*hour_of_day*(contains("lag")))|>
+  step_normalize(all_numeric(), -all_outcomes())
+
+# Lag 12 hours
+lag12_int_df<- rec_lags|>
+  select(doy, hour_of_day, Depth_m, DO_mg.L, val_period, validation_period,Datetime,contains("lag12hr"))|>
+  drop_na(DO_mg.L,contains("lag"))
+
+lag12_int_split <- initial_split(lag12_int_df) 
+lag12_int_split$in_id <- which(lag12_int_df$validation_period == "training")
+lag12_int_training <- training(lag12_int_split)
+lag12_int_testing <- testing(lag12_int_split)
+
+rec_int_lag12<-recipe(DO_mg.L ~ ., data = lag12_int_training)|>
+  step_select(-validation_period, -val_period,-Datetime,skip = TRUE)|>
+  step_interact(terms = ~Depth_m*hour_of_day*(contains("lag")))|>
+  step_normalize(all_numeric(), -all_outcomes())
+
+# Lag 24 hours
+lag24_int_df<- rec_lags|>
+  select(doy, hour_of_day, Depth_m, DO_mg.L, val_period, validation_period,Datetime,contains("lag24hr"))|>
+  drop_na(DO_mg.L,contains("lag"))
+
+lag24_int_split <- initial_split(lag24_int_df) 
+lag24_int_split$in_id <- which(lag24_int_df$validation_period == "training")
+lag24_int_training <- training(lag24_int_split)
+lag24_int_testing <- testing(lag24_int_split)
+
+rec_int_lag24<-recipe(DO_mg.L ~ ., data = lag24_int_training)|>
+  step_select(-validation_period, -val_period,-Datetime,skip = TRUE)|>
+  step_interact(terms = ~Depth_m*hour_of_day*(contains("lag")))|>
+  step_normalize(all_numeric(), -all_outcomes())
+
+# Lag 48 hours
+lag48_int_df<- rec_lags|>
+  select(doy, hour_of_day, Depth_m, DO_mg.L, val_period, validation_period,Datetime,contains("lag48hr"))|>
+  drop_na(DO_mg.L,contains("lag"))
+
+lag48_int_split <- initial_split(lag48_int_df) 
+lag48_int_split$in_id <- which(lag48_int_df$validation_period == "training")
+lag48_int_training <- training(lag48_int_split)
+lag48_int_testing <- testing(lag48_int_split)
+
+rec_int_lag48<-recipe(DO_mg.L ~ ., data = lag48_int_training)|>
+  step_select(-validation_period, -val_period,-Datetime,skip = TRUE)|>
+  step_interact(terms = ~Depth_m*hour_of_day*(contains("lag")))|>
+  step_normalize(all_numeric(), -all_outcomes())
+# Lag 72 hours
+lag72_int_df<- rec_lags|>
+  select(doy, hour_of_day, Depth_m, DO_mg.L, val_period, validation_period,Datetime,contains("lag72hr"))|>
+  drop_na(DO_mg.L,contains("lag"))
+
+lag72_int_split <- initial_split(lag72_int_df) 
+lag72_int_split$in_id <- which(lag72_int_df$validation_period == "training")
+lag72_int_training <- training(lag72_int_split)
+lag72_int_testing <- testing(lag72_int_split)
+
+rec_int_lag72<-recipe(DO_mg.L ~ ., data = lag72_int_training)|>
+  step_select(-validation_period, -val_period,-Datetime,skip = TRUE)|>
+  step_interact(terms = ~Depth_m*hour_of_day*(contains("lag")))|>
+  step_normalize(all_numeric(), -all_outcomes())
+
+
+```
+
+
+Save all recipes as a list object that can be read directly into downstream modeling
+
+```{r}
+recipe_list <- list("lag0" = rec_lag0,"lag2" = rec_lag2,"lag6" = rec_lag6,"lag12" = rec_lag12,"lag24" = rec_lag24,"lag48" = rec_lag48,"lag72" = rec_lag72, 
+                    "lag0_int" = rec_int_lag0,"lag2_int" = rec_int_lag2,"lag6_int" = rec_int_lag6,"lag12_int" = rec_int_lag12,"lag24_int" = rec_int_lag24,"lag48_int" = rec_int_lag48,"lag72_int" = rec_int_lag72)
+
+#saveRDS(recipe_list, here("Predictive_Models/RC_pred_recipe_list.Rds")
+save.image(here("Predictive_Models/Create_Recipes_Environment.Rdata"))
+```

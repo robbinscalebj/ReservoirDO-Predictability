@@ -1,0 +1,1174 @@
+---
+title: "MultiReservoir_Comparison"
+output: html_document
+date: "2023-06-27"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(tidymodels)
+library(parallel)
+library(doParallel)
+library(rLakeAnalyzer)
+library(ggsci)
+library(ggdist)
+library(shapr)
+library(emmeans)
+library(nlme)
+library(cowplot)
+library(here)
+
+here::i_am("Predictive_Models/MultiReservoir_Comparison.Rmd")
+```
+
+# Richland Chambers
+```{r}
+rc_randfor<-readRDS(here("Predictive_Models/trained_workflows/randfor_fit.Rds")) #randfor_fit  is not specifically a workflow - this has already had last_fit() run on it because we had to specify the exact lag6 recipe for the final fit (instead of the split object) because ranger can't handle missing values
+rc_data <- rc_randfor[[1]][[1]][["data"]]|>
+  mutate(Datetime = round_date(Datetime, "2 hours")) #need datetime to be consistent for profile grouping
+
+rc_metrics <- rc_randfor |> 
+  collect_metrics()
+
+rc_preds <- rc_randfor |>
+  collect_predictions()|>
+  bind_cols(rc_data|>select(-DO_mg.L)|>filter(!is.na(val_period)))
+
+
+rc_preds |> 
+ggplot()+
+  geom_point(aes(x = .pred, y = DO_mg.L))+
+  ylab("Observed DO (mg/L)")+
+  xlab("Predicted DO (mg/L)")+
+  coord_obs_pred()
+
+rc_pred_0<-ggplot(rc_preds|>
+  filter(Depth_m == 0))+
+  geom_point(aes(x = Datetime, y = .pred))+
+  geom_line(aes(x = Datetime, y = DO_mg.L))+
+  ylab("DO (mg/L)")+
+  facet_wrap(.~val_period, scales = "free")+
+  ggtitle("Richland-Chambers - 0 m")+
+  theme_classic()+theme(axis.title.x = element_blank())
+
+rc_pred_5<-rc_preds|>
+  filter(Depth_m == 5)|>
+ggplot()+
+  geom_point(aes(x = Datetime, y = .pred))+
+  geom_line(aes(x = Datetime, y = DO_mg.L))+
+  ylab("DO (mg/L)")+
+  facet_wrap(.~val_period, scales = "free")+
+  ggtitle("Richland-Chambers - 5 m")+
+  theme_classic()+theme(axis.title.x = element_blank())
+
+rc_pred_10<-rc_preds|>
+  filter(Depth_m == 10)|>
+ggplot()+
+  geom_point(aes(x = Datetime, y = .pred))+
+  geom_line(aes(x = Datetime, y = DO_mg.L))+
+  ylab("DO (mg/L)")+
+  facet_wrap(.~val_period, scales = "free")+
+  ggtitle("Richland-Chambers - 10 m")+
+  theme_classic()+theme(axis.title.x = element_blank())
+
+#ggsave(plot = rc_pred_0, here("Predictive_Models/figures/FigSx_rc_pred0.jpeg"), height = 8, width = 12, units = "in")
+#ggsave(plot = rc_pred_5, here("Predictive_Models/figures/FigSx_rc_pred5.jpeg"), height = 8, width = 12, units = "in")
+#ggsave(plot = rc_pred_10, here("Predictive_Models/figures/FigSx_rc_pred10.jpeg"), height = 8, width = 12, units = "in")
+```
+# Maumelle
+```{r}
+maum_randfor<-readRDS(here("Predictive_Models/Maumelle/randfor_fit.Rds")) #randfor_fit  is not specifically a workflow - this has already had last_fit() run on it because we had to specify the exact lag6 recipe for the final fit (instead of the split object) because ranger can't handle missing values
+maum_data <- maum_randfor[[1]][[1]][["data"]]
+maum_metrics <- maum_randfor |> 
+  collect_metrics()
+
+maum_preds <- maum_randfor |>
+  collect_predictions()|>
+  bind_cols(maum_data|>select(-DO_mg.L)|>filter(!is.na(val_period)))|>
+  mutate(DO_mg.L = ifelse(DO_mg.L <0, 0, DO_mg.L))
+
+
+maum_preds |> 
+ggplot()+
+  geom_point(aes(x = .pred, y = DO_mg.L))+
+  ylab("Observed DO (mg/L)")+
+  xlab("Predicted DO (mg/L)")+
+  coord_obs_pred()
+
+maum_pred_0<-ggplot(maum_preds|>
+  filter(Depth_m == 0))+
+  geom_point(aes(x = Datetime, y = .pred))+
+  geom_line(aes(x = Datetime, y = DO_mg.L))+
+  ylab("DO (mg/L)")+
+  facet_wrap(.~val_period, scales = "free")+
+  ggtitle("Maumelle - 0 m")+
+  theme_classic()+theme(axis.title.x = element_blank())
+
+maum_pred_5<-maum_preds|>
+  filter(Depth_m == 5)|>
+ggplot()+
+  geom_point(aes(x = Datetime, y = .pred))+
+  geom_line(aes(x = Datetime, y = DO_mg.L))+
+  ylab("DO (mg/L)")+
+  facet_wrap(.~val_period, scales = "free")+
+  ggtitle("Maumelle - 5 m")+
+  theme_classic()+theme(axis.title.x = element_blank())
+
+maum_pred_9<-maum_preds|>
+  filter(Depth_m == 9)|>
+ggplot()+
+  geom_point(aes(x = Datetime, y = .pred))+
+  geom_line(aes(x = Datetime, y = DO_mg.L))+
+  ylab("DO (mg/L)")+
+  facet_wrap(.~val_period, scales = "free")+
+  ggtitle("Maumelle - 9 m")+
+  theme_classic()+theme(axis.title.x = element_blank())
+
+#ggsave(plot = maum_pred_0, here("Predictive_Models/figures/FigSx_maum_pred0.jpeg"), height = 8, width = 12, units = "in")
+#ggsave(plot = maum_pred_5, here("Predictive_Models/figures/FigSx_maum_pred5.jpeg"), height = 8, width = 12, units = "in")
+#ggsave(plot = maum_pred_9, here("Predictive_Models/figures/FigSx_maum_pred9.jpeg"), height = 8, width = 12, units = "in")
+```
+# Fayetteville
+```{r}
+fay_randfor<-readRDS(here("Predictive_Models/Fayetteville/randfor_fit.Rds")) #randfor_fit  is not specifically a workflow - this has already had last_fit() run on it because we had to specify the exact recipe for the final fit (instead of the split object) because ranger can't handle missing values
+fay_data <- fay_randfor[[1]][[1]][["data"]]
+
+fay_metrics <- fay_randfor |> 
+  collect_metrics()
+
+fay_preds <- fay_randfor |>
+  collect_predictions()|>
+  bind_cols(fay_data|>select(-DO_mg.L)|>filter(!is.na(val_period)))
+
+
+fay_preds |> 
+ggplot()+
+  geom_point(aes(x = .pred, y = DO_mg.L))+
+  ylab("Observed DO (mg/L)")+
+  xlab("Predicted DO (mg/L)")+
+  coord_obs_pred()
+
+fay_pred_0<-ggplot(fay_preds|>
+  filter(Depth_m == 0))+
+  geom_point(aes(x = Datetime, y = .pred))+
+  geom_line(aes(x = Datetime, y = DO_mg.L))+
+  ylab("DO (mg/L)")+
+  facet_wrap(.~val_period, scales = "free")+
+  ggtitle("Fayetteville - 0 m")+
+  theme_classic()+theme(axis.title.x = element_blank())
+
+fay_pred_5<-fay_preds|>
+  filter(Depth_m == 5)|>
+ggplot()+
+  geom_point(aes(x = Datetime, y = .pred))+
+  geom_line(aes(x = Datetime, y = DO_mg.L))+
+  ylab("DO (mg/L)")+
+  facet_wrap(.~val_period, scales = "free")+
+  ggtitle("Fayetteville - 5 m")+
+  theme_classic()+theme(axis.title.x = element_blank())
+
+fay_pred_85<-fay_preds|>
+  filter(Depth_m == 8.5)|>
+ggplot()+
+  geom_point(aes(x = Datetime, y = .pred))+
+  geom_line(aes(x = Datetime, y = DO_mg.L))+
+  ylab("DO (mg/L)")+
+  facet_wrap(.~val_period, scales = "free")+
+  ggtitle("Fayetteville - 8.5 m")+
+  theme_classic()+theme(axis.title.x = element_blank())
+
+#ggsave(plot = fay_pred_0, here("Predictive_Models/figures/FigSx_fay_pred0.jpeg"), height = 8, width = 12, units = "in")
+#ggsave(plot = fay_pred_5, here("Predictive_Models/figures/FigSx_fay_pred5.jpeg"), height = 8, width = 12, units = "in")
+#ggsave(plot = fay_pred_85, here("Predictive_Models/figures/FigSx_fay_pred85.jpeg"), height = 8, width = 12, units = "in")
+```
+
+# Eagle Mountain
+```{r}
+em_randfor<-readRDS(here("Predictive_Models/EM/randfor_fit.Rds")) #randfor_fit is not specifically a workflow - this has already had last_fit() run on it because we had to specify the exact lag0 recipe for the final fit (instead of the split object) because ranger can't handle missing values
+em_data <- em_randfor[[1]][[1]][["data"]]
+
+
+em_metrics <- em_randfor |> 
+  collect_metrics()
+
+em_preds <- em_randfor |>
+  collect_predictions()|>
+  bind_cols(em_data|>select(-DO_mg.L)|>filter(!is.na(val_period)))
+
+
+em_preds |> 
+ggplot()+
+  geom_point(aes(x = .pred, y = DO_mg.L))+
+  ylab("Observed DO (mg/L)")+
+  xlab("Predicted DO (mg/L)")+
+  coord_obs_pred()
+
+
+em_pred_0<-ggplot(em_preds|>
+  filter(Depth_m == 0))+
+  geom_point(aes(x = Datetime, y = .pred))+
+  geom_line(aes(x = Datetime, y = DO_mg.L))+
+  ylab("DO (mg/L)")+
+  facet_wrap(.~val_period, scales = "free")+
+  ggtitle("Eagle Mountain - 0 m")+
+  theme_classic()+theme(axis.title.x = element_blank())
+
+em_pred_5<-em_preds|>
+  filter(Depth_m == 5)|>
+ggplot()+
+  geom_point(aes(x = Datetime, y = .pred))+
+  geom_line(aes(x = Datetime, y = DO_mg.L))+
+  ylab("DO (mg/L)")+
+  facet_wrap(.~val_period, scales = "free")+
+  ggtitle("Eagle Mountain - 5 m")+
+  theme_classic()+theme(axis.title.x = element_blank())
+
+em_pred_10<-em_preds|>
+  filter(Depth_m == 10)|>
+ggplot()+
+  geom_point(aes(x = Datetime, y = .pred))+
+  geom_line(aes(x = Datetime, y = DO_mg.L))+
+  ylab("DO (mg/L)")+
+  facet_wrap(.~val_period, scales = "free")+
+  ggtitle("Eagle Mountain - 10 m")+
+  theme_classic()+theme(axis.title.x = element_blank())
+
+#ggsave(plot = em_pred_0, here("Predictive_Models/figures/FigSx_em_pred0.jpeg"), height = 8, width = 12, units = "in")
+#ggsave(plot = em_pred_5, here("Predictive_Models/figures/FigSx_em_pred5.jpeg"), height = 8, width = 12, units = "in")
+#ggsave(plot = em_pred_10, here("Predictive_Models/figures/FigSx_em_pred10.jpeg"), height = 8, width = 12, units = "in")
+```
+
+    
+
+# Multi-reservoir comparison
+
+## Plot themes
+
+```{r plot themes}
+mytheme_fig2 <- theme_classic()+
+    theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 12,face = "bold"),
+          axis.text.y = element_text(size = 14, face = "bold"),
+          axis.title.y = element_text(size = 15, face = "bold"),
+          axis.title.x = element_blank(),
+          strip.text = element_text(size = 15, face = "bold"),
+          legend.text = element_text(size = 20, face = "bold"),
+          legend.title = element_blank(),
+          legend.position = c(0.1,0.125),
+          panel.grid.major = element_blank(), panel.grid.minor = element_blank(),panel.background = element_blank())  
+  
+mytheme_fig3 <- theme_classic()+
+    theme(axis.text.x = element_text(size = 16, face = "bold"),
+          axis.text.y = element_text(size = 14, face = "bold"),
+          axis.title.y = element_text(size = 20, face = "bold"),
+          legend.text = element_text(size = 12, face = "bold"),
+          legend.title = element_text(size = 14, face = "bold"),
+          panel.grid.major = element_blank(), panel.grid.minor = element_blank(),panel.background = element_blank())
+
+```
+
+
+## Temp, DO, and Schmidt time series
+```{r set up data}
+data_all <- bind_rows(em_data|>mutate(lake = "Eagle Mountain", 
+                                    depth_cat = case_when(Depth_m == 10 ~ "Bottom")),
+                    rc_data|>mutate(lake = "Richland-Chambers", 
+                                    depth_cat = case_when(Depth_m == 10 ~ "Bottom")),
+                    fay_data|>mutate(lake = "Fayetteville", 
+                                    depth_cat = case_when(Depth_m == 8.5 ~ "Bottom")),
+                    maum_data|>mutate(lake = "Maumelle", 
+                                    depth_cat = case_when(Depth_m == 9 ~ "Bottom")))|>
+  mutate(depth_cat = ifelse(Depth_m == 0, "Surface", depth_cat),
+         depth_cat = as_factor(depth_cat),
+         depth_cat = fct_relevel(depth_cat, "Surface", "Bottom"),
+         lake = as_factor(lake),
+         lake = fct_relevel(lake, "Eagle Mountain", "Richland-Chambers", "Fayetteville", "Maumelle"),
+         validation_period = as_factor(validation_period),
+         validation_period = fct_recode(validation_period, Training = "training", Testing = "testing"))
+
+
+rc_bathy <- read_csv(here("RC_hypsograph_for_WET.csv"), col_names = FALSE)|>
+  rename(elev_m = "X1", SA_m2 = "X2")|>
+  mutate(Depth_m = -(elev_m-25.2))|>
+  filter(Depth_m <= 10)|>
+  arrange(Depth_m)
+
+em_bathy <- read_csv(here("predictive_Models/area-Eagle.csv"))|>
+  rename(SA_m2 = "m2", Depth_m = "Depth")
+
+fay_bathy <- read_csv(here("predictive_Models/bathy-Fayetteville.csv"))|>
+  rename(SA_m2 = "areas", Depth_m = "depths")
+
+maum_bathy <- read_csv(here("predictive_Models/bathy-Maumelle.csv"))|>
+  mutate(Depth_m = `Depth ft`/-3.28,
+         SA_m2 = SA_km2*1e6,
+         .keep = "unused")|>
+  slice(-1)
+
+
+res_schm<- data_all|> 
+  select(lake,Datetime, val_period, validation_period, WaterTemp_C, Depth_m)|>
+  group_by(lake,Datetime, val_period, validation_period)|>
+  mutate(schm.stab = case_when(lake == "Richland-Chambers" ~ schmidt.stability(wtr = WaterTemp_C, depths = Depth_m, bthA = rc_bathy$SA_m2, bthD = rc_bathy$Depth_m),
+                               lake == "Eagle Mountain" ~ schmidt.stability(wtr = WaterTemp_C, depths = Depth_m, bthA = em_bathy$SA_m2, bthD = em_bathy$Depth_m),
+                               lake == "Maumelle" ~ schmidt.stability(wtr = WaterTemp_C, depths = Depth_m, bthA = maum_bathy$SA_m2, bthD = maum_bathy$Depth_m),
+                               lake == "Fayetteville" ~ schmidt.stability(wtr = WaterTemp_C, depths = Depth_m, bthA = fay_bathy$SA_m2, bthD = fay_bathy$Depth_m)),
+         thermocline_m = thermo.depth(wtr = WaterTemp_C, depths = Depth_m))|>
+  select(-WaterTemp_C, -Depth_m)|>
+  slice_head(n=1)
+
+
+
+```
+
+
+
+```{r calc schmidts}
+
+res_schm_sums<-res_schm|>
+  mutate(doy = yday(Datetime))|>
+  group_by(lake,val_period, doy)|>
+  summarize(mixing_action = sum(schm.stab),
+            schm.stab_mean = mean(schm.stab, na.rm = TRUE), 
+            schm.stab_sd = sd(schm.stab),
+            schm.stab_cv = sd(schm.stab)/schm.stab_mean, 
+            schm.stab_var = var(schm.stab),
+            schm.stab_nvar = var(schm.stab)/mean(schm.stab))|>#mixing action adapted from Oleksy and richardson 2021
+  mutate(schm.stab_diff = schm.stab_mean-lag(schm.stab_mean))
+
+
+```
+
+```{r Fig 2 Schmidt stability through year}
+
+schmidt.p0 <- ggplot() +
+  geom_point(data=res_schm, aes(x=Datetime, y=schm.stab, color=validation_period), size=1.5, alpha = 0.6) +
+  scale_color_jco()+
+  #scale_y_continuous(breaks = c(-125, 0, 125, 250, 375,500), limits = c(-130,525))+
+  scale_x_datetime(date_breaks = "1 month", date_labels = "%b")+
+  ylab(bquote("Schmidt Stability " (J/m^2)))+
+  geom_hline(yintercept = 0)+
+  guides(colour = guide_legend(override.aes = list(size=4)))+
+  facet_wrap(.~lake, scales = "free_x")+
+  mytheme_fig2+
+  theme(legend.position = c(0.89,0.3))
+schmidt.p0
+
+schmidtsums.p0 <- ggplot() +
+  geom_point(data=res_schm_sums, aes(x=as.Date(doy, origin = "2020-01-01"), y=schm.stab_sd), size=1.5, alpha = 0.6) +
+  scale_color_jco()+
+  #scale_y_continuous(breaks = c(-125, 0, 125, 250, 375,500), limits = c(-130,525))+
+  scale_x_date(date_breaks = "1 month", date_labels = "%b", limits = c(as_date("2020-04-01"), as_date("2020-12-31")))+
+  ylab(expression(bold(paste("Mixing (Schmidt Stability  ", sigma, ")"))))+
+  geom_hline(yintercept = 0)+
+  guides(colour = guide_legend(override.aes = list(size=4)))+
+  facet_wrap(.~lake, scales = "free_x")+
+  mytheme_fig2+
+  theme(legend.position = c(0.89,0.3))
+schmidtsums.p0
+
+thermo.p0 <- ggplot() +
+  geom_point(data=res_schm, aes(x=Datetime, y=thermocline_m, color=validation_period), size=1.5, alpha = 0.6) +
+  scale_color_jco()+
+  #scale_y_continuous(breaks = c(-125, 0, 125, 250, 375,500), limits = c(-130,525))+
+  scale_x_datetime(date_breaks = "1 month", date_labels = "%b")+
+  ylab(bquote("Thermocline Depth (m)"))+
+  guides(colour = guide_legend(override.aes = list(size=4)))+
+  facet_wrap(.~lake, scales = "free_x")+
+  mytheme_fig2+
+  theme(legend.position = c(0.89,0.3))+
+  guides(color = "none")+
+  scale_y_reverse()
+thermo.p0
+
+stab.cow <- plot_grid(schmidt.p0,thermo.p0, nrow = 2)
+
+ggsave(plot = schmidt.p0,here("Predictive_Models/figures/Fig2_Schmidt_TimeSeries.jpeg"), height = 8, width = 8, units = "in")
+ggsave(plot = schmidtsums.p0,here("Predictive_Models/figures/FigSx_SchmidtStDev_TimeSeries.jpeg"), height = 4, width = 8, units = "in")
+```
+
+```{r Fig 3 Temp and DO Time Series}
+
+theme_fig3 <- theme_classic()+
+    theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 14,face = "bold"),
+          axis.text.y = element_text(size = 16, face = "bold"),
+          axis.title.y = element_text(size = 18, face = "bold"),
+          axis.title.x = element_blank(),
+          strip.text.x = element_text(size = 16, face = "bold"),
+          strip.text.y = element_text(size = 18, face = "bold"),
+          legend.text = element_text(size = 20, face = "bold"),
+          legend.title = element_blank(),
+          legend.position = c(0.1,0.125),
+          panel.grid.major = element_blank(), panel.grid.minor = element_blank(),panel.background = element_blank())  
+
+temp.p0 <- ggplot() +
+  geom_point(data=data_all|>filter(!is.na(depth_cat)), aes(x=Datetime, y=WaterTemp_C, color=validation_period), size=1.5, alpha = 0.6) +
+  scale_color_jco()+
+  scale_y_continuous(breaks = c(5, 15,25,35), limits = c(4,36))+
+  scale_x_datetime(date_breaks = "1 month", date_labels = "%b")+
+  ylab("Water Temperature (C)")+
+  facet_grid(depth_cat~lake, scales = "free_x")+
+  guides(colour = guide_legend(override.aes = list(size=4)))+
+  theme_fig3
+
+do_mg.p0 <- ggplot() +
+  geom_point(data=data_all|>filter(!is.na(depth_cat)), aes(x=Datetime, y=DO_mg.L, color=validation_period), size=1.5, alpha = 0.6) +
+  scale_color_jco()+
+  scale_y_continuous(breaks = c(0,5,10,15), limits = c(0,16.75))+
+  scale_x_datetime(date_breaks = "1 month", date_labels = "%b")+
+  ylab("DO (mg/L)")+
+  facet_grid(depth_cat~lake, scales = "free")+
+  guides(colour = guide_legend(override.aes = list(size=4)))+
+  theme_fig3+
+  guides(color = "none")
+
+
+temp_do.cow <- plot_grid(temp.p0,do_mg.p0, nrow = 2)
+
+
+ggsave(plot = temp_do.cow,here("Predictive_Models/figures/Fig3_TempAndDO_TimeSeries.jpeg"), height = 12, width = 12, units = "in")
+```
+
+## Modeling comparisons
+
+```{r set up analysis}
+res_preds <- bind_rows(maum_preds|>mutate(lake = "Maumelle"), em_preds|>mutate(lake = "Eagle Mountain"), 
+                       rc_preds|>mutate(lake = "Richland-Chambers"), fay_preds|>mutate(lake = "Fayetteville"))|>
+  mutate(val_period = as_factor(val_period),
+        lake = as_factor(lake),
+         lake = fct_relevel(lake, "Eagle Mountain", "Richland-Chambers", "Fayetteville", "Maumelle"),
+        season = case_when(lake == "Eagle Mountain" & val_period %in% c(3:7) ~ "Warm",
+                           lake == "Richland-Chambers" & val_period %in% c(3:7) ~ "Warm",
+                           lake == "Fayetteville" & val_period %in% c(2:8) ~ "Warm",
+                           lake == "Maumelle" & val_period %in% c(2:8) ~ "Warm",
+                           .default = "Cool"),
+        depth_cat = case_when(lake == "Eagle Mountain" & Depth_m == 10 ~ "Bottom",
+                           lake == "Richland-Chambers" & Depth_m == 10 ~ "Bottom",
+                           lake == "Fayetteville" & Depth_m == 8.5 ~ "Bottom",
+                           lake == "Maumelle" & Depth_m == 9 ~ "Bottom",
+                           Depth_m == 0 ~ "Surface",
+                           Depth_m == 5 ~ "Middle"),
+        depth_cat = as_factor(depth_cat),
+        depth_cat = fct_relevel(depth_cat, "Surface", "Middle", "Bottom"))
+
+res_rmse <- res_preds|>ungroup()|>
+  group_by(lake, val_period, Datetime, Depth_m, season, depth_cat)|>
+  rmse(truth = DO_mg.L, estimate = .pred)|>
+  left_join(res_preds)
+
+#table
+# include median, mode, quantiles of rmse by lake and season
+
+```
+
+```{r RMSE qualitative comparisons}
+rmse_overall.p <- res_rmse|>
+  ggplot(aes(x= .estimate, y = lake, fill = lake))+
+  scale_fill_jco(guide = FALSE)+
+  stat_halfeye()+
+  xlab("RMSE")+
+  scale_x_continuous(limits = c(0,6.5), breaks = c(0,1,2,3,4,5,6))+
+  scale_y_discrete(limits = rev)+
+  mytheme_fig3+
+  theme(axis.title.y = element_blank(), legend.title = element_blank(), axis.title.x = element_text(size = 20, face = "bold"))
+rmse_overall.p
+
+#create table - would like rmse to be aggregated on daily time scale
+res_rmse_daily <- res_preds|>ungroup()|>mutate(doy = yday(Datetime))|>
+  group_by(lake, val_period, doy, Depth_m, season, depth_cat)|>
+  rmse(truth = DO_mg.L, estimate = .pred)|>
+  filter(!is.na(depth_cat))
+
+res_rmse_all <- res_preds|>ungroup()|>mutate(doy = yday(Datetime))|>
+  group_by(lake)|>
+  rmse(truth = DO_mg.L, estimate = .pred)|>select(lake,.estimate)|>rename("Overall RMSE" = .estimate)
+
+res_rmse_r2 <- res_preds|>ungroup()|>mutate(doy = yday(Datetime))|>
+  group_by(lake)|>
+  rsq(truth = DO_mg.L, estimate = .pred)|>select(lake,.estimate)|>rename(`Overall R2` = .estimate)
+
+ts_dates <- data_all|>
+  group_by(lake)|>
+  summarize(`Time Series Dates` = str_c(floor_date(min(Datetime), unit = "day"),
+                               floor_date(max(Datetime), unit = "day"),
+                               sep = " - "))
+
+ts_lengths <- data_all|>
+  group_by(lake, validation_period)|>
+  summarize(N = n())|>
+  pivot_wider(names_from = "validation_period", values_from = "N")|>
+  rename("N (Training)"= "Training", "N (Testing)"= "Testing")|>
+  left_join(ts_dates)|>
+  left_join(res_rmse_r2)
+
+res_rmse_sums <- res_rmse_daily|>
+  group_by(lake)|>
+  summarize(`RMSE Min` = min(.estimate), 
+            `RMSE 5%` = quantile(.estimate,0.05),
+            `RMSE 25%` = quantile(.estimate,0.25),
+            `RMSE 50%` = quantile(.estimate,0.5),
+            `RMSE 75%` = quantile(.estimate,0.75),
+            `RMSE 95%` = quantile(.estimate,0.95),
+            `RMSE Max` = max(.estimate))
+
+Table1_df <- full_join(ts_lengths, res_rmse_sums)|>left_join(res_rmse_all)|>relocate("Overall RMSE", .before = "RMSE Min")|>
+  mutate("Mixing Regime" = case_when(lake %in% c("Maumelle", "Fayetteville") ~ "Monomictic",
+                                     lake %in% c("Richland-Chambers", "Eagle Mountain") ~ "Polymictic"),
+         "Trophic State" = case_when(lake == "Maumelle" ~ "Mesotrophic", #Shaver thesis
+                                     lake == "Fayetteville" ~ "Eutrophic", #haggard et al
+                                     lake == "Richland-Chambers" ~ "Eutrophic", # cjr unpub'd
+                                     lake == "Eagle Mountain" ~ "Eutrophic"),#Wagner et al
+         "Mean Depth (m)" = case_when(lake == "Maumelle" ~ "7.5", 
+                                     lake == "Fayetteville" ~ "3", 
+                                     lake == "Richland-Chambers" ~ "8", 
+                                     lake == "Eagle Mountain" ~ "6"),
+         "Surface Area (km^2)" = case_when(lake == "Maumelle" ~ "36", 
+                                     lake == "Fayetteville" ~ "0.8", 
+                                     lake == "Richland-Chambers" ~ "170", 
+                                     lake == "Eagle Mountain" ~ "37"),
+         .after = lake)|> 
+  mutate(across(where(is.numeric), ~round(.,digits = 2)))|>
+  rename(Lake = "lake")
+
+write_csv(Table1_df, here("Predictive_Models/manuscript_Table1.csv"))
+
+
+res_rmse_daily_anoxia <- res_preds|>ungroup()|>mutate(doy = yday(Datetime))|>
+  filter(DO_mg.L <2)|>
+  group_by(lake, Depth_m, season, depth_cat)|>
+  rmse(truth = DO_mg.L, estimate = .pred)|>
+  filter(!is.na(depth_cat))
+
+```
+
+```{r Fig Sx}
+
+ggplot(res_rmse|>rename(rmse = ".estimate")|>filter(!is.na(depth_cat))|>
+         group_by(depth_cat, val_period, lake)|>summarize(var_rmse = var(rmse), rmse = mean(rmse)))+
+  geom_point(aes(x = val_period, y = rmse, color = depth_cat),size = 2.5, alpha = 0.6)+
+  geom_errorbar(aes(x = val_period, ymin = rmse - var_rmse, ymax = rmse+var_rmse, color = depth_cat),  width = 0.5)+
+  scale_color_jco()+
+  scale_y_continuous(breaks = c(0,5,10,15), limits = c(0,16.75))+
+  #scale_x_datetime(date_breaks = "1 month", date_labels = "%b")+
+  ylab("RMSE")+
+  facet_grid(lake~depth_cat, scales = "free")+
+  #guides(colour = guide_legend(override.aes = list(size=4)))+
+  mytheme_fig2+
+  theme(legend.position = c(0.85,0.8))+
+  guides(color = "none")
+
+
+```
+
+## Seasonal LME
+```{r}
+
+res_rmse_df <- res_rmse|>rename(rmse = ".estimate")|>filter(!is.na(depth_cat))|>
+  mutate(corr_grouping = as_factor(str_c(lake,season,depth_cat,sep = "_")),
+         doy = yday(Datetime),
+         corr_group2 = str_c(lake,depth_cat,val_period, sep="_"))|>
+  filter(doy !=1)|> #gets rid of a couple RC time points that happened to be just after the New Year - artefact of converting to UTC I suppose
+  group_by(lake,season,val_period, depth_cat, doy, corr_grouping, corr_group2)|>
+  summarize(rmse = sqrt(sum(rmse^2)/n()))|>
+  drop_na()
+
+
+m1 <- nlme::gls(data = res_rmse_df,rmse ~  season*lake*depth_cat,
+                correlation = corAR1(form = ~doy|corr_group2),
+                 weights = varIdent(form = ~1|lake*season*depth_cat), 
+                 control = lmeControl(opt = "optim", optimMethod = "L-BFGS-B"))
+m2 <- nlme::lme(data = res_rmse_df,rmse ~ season*lake*depth_cat, 
+                random = ~1|corr_group2,
+                correlation = corAR1(form = ~doy|corr_group2),
+                 weights = varIdent(form = ~1|lake*season*depth_cat), 
+                 control = lmeControl(opt = "optim", optimMethod = "L-BFGS-B"))
+m3 <- nlme::gls(data = res_rmse_df,rmse ~ season*lake*depth_cat, 
+                correlation = corAR1(form = ~doy|corr_group2), 
+                 control = lmeControl(opt = "optim", optimMethod = "L-BFGS-B"))
+m4 <- nlme::lme(data = res_rmse_df,rmse ~ season*lake*depth_cat, 
+                random = ~1|corr_group2,
+                 control = lmeControl(opt = "optim", optimMethod = "L-BFGS-B"))
+m_base<-nlme::gls(data = res_rmse_df,rmse ~  season*lake*depth_cat)
+AIC(m1,m2,m3,m4, m_base) 
+
+plot(ACF(m1, resType = "normalized"), alpha = 0.05) # autocorrelation looks good
+summary(m1)
+ggplot()+
+  geom_boxplot(aes(x = res_rmse_df$corr_grouping, y = resid(m1)))
+
+ggplot()+
+  geom_histogram(aes(resid(m1)))
+
+# plot resids by covariate
+ggplot()+
+  geom_boxplot(aes(x = res_rmse_df$corr_grouping, y = resid(m1))) # error variances pretty equal
+
+ggplot()+
+  geom_histogram(aes(resid(m1))) 
+
+# m4 is best model via AIC, but has bad autocorrelation problems, so using m1, which is also a pretty good model and actively accounts for temporal autocorrelation
+
+```
+
+```{r emmeans, contrasts and Fig 4}
+
+# PLOT m1
+
+joint_tests(m1)
+#simple contrasts across lakes
+lake_c<-contrast(emmeans(m1, ~lake*season), "pairwise", by = "season")|>broom::tidy(conf.int = TRUE)|>filter(adj.p.value <= 0.05)
+
+contrast(m1_em, "pairwise", by = c("lake", "depth_cat"))|>broom::tidy(conf.int = TRUE)|>filter(p.value <= 0.05)
+emmeans(m1, pairwise ~lake, by = "season")|>pluck("contrasts")|>broom::tidy(conf.int = TRUE)|>filter(adj.p.value <= 0.05)
+m1_em <- emmeans(m1, ~season*lake*depth_cat)
+m1_pw <- contrast(m1_em, "pairwise", by = c("lake", "depth_cat"))|>broom::tidy(conf.int = TRUE)|>filter(p.value <= 0.05)
+m1_pw
+m1_em_tidy <- emmeans(m1, ~season*lake*depth_cat)|>broom::tidy(conf.int = TRUE)|>mutate(diff_ci = conf.high-conf.low)
+
+
+theme_fig4 <- theme_classic()+
+    theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 14,face = "bold"),
+          axis.text.y = element_text(size = 14, face = "bold"),
+          axis.title.y = element_text(size = 18, face = "bold"),
+          axis.title.x = element_text(size = 18, face = "bold"),
+          strip.text = element_text(size = 15, face = "bold"),
+          legend.text = element_text(size = 20, face = "bold"),
+          legend.title = element_blank(),
+          legend.position = c(0.85,0.8),
+          panel.grid.major = element_blank(), panel.grid.minor = element_blank(),panel.background = element_blank())  
+
+seas_rmse.p<-ggplot()+
+  geom_jitter(data = res_rmse_df, aes(x = season, y = rmse, color = depth_cat), alpha = 0.3)+
+  geom_point(data = m1_em_tidy, aes(x = season, y = estimate, color = depth_cat),color = "black",size = 2.5, alpha = 0.9)+
+  geom_errorbar(data = m1_em_tidy,aes(x = season, ymin = conf.low, ymax = conf.high, group = depth_cat),  color = "black", width = 0.3)+
+  scale_color_jco()+
+  ylab("RMSE")+
+  facet_grid(factor(lake, levels= c("Eagle Mountain", "Richland-Chambers", "Fayetteville", "Maumelle"))~factor(depth_cat, levels= c("Surface", "Middle", "Bottom")), scales = "free")+
+  #scale_y_discrete(breaks = levels(res_rmse_df$lake),labels = levels(res_rmse_df$lake))+
+  theme_fig4+
+  guides(color = "none")
+seas_rmse.p
+
+seas_rmse.p2<-ggplot()+
+  geom_jitter(data = res_rmse_df, aes(x = season, y = rmse, color = depth_cat), alpha = 0.3)+
+  geom_point(data = m1_em_tidy, aes(x = season, y = estimate, color = depth_cat),color = "black",size = 2.5, alpha = 0.9)+
+  geom_errorbar(data = m1_em_tidy,aes(x = season, ymin = conf.low, ymax = conf.high, group = depth_cat),  color = "black", width = 0.3)+
+  scale_color_jco()+
+  ylab("RMSE")+
+  facet_grid(factor(depth_cat, levels= c("Surface", "Middle", "Bottom"))~factor(lake, levels= c("Eagle Mountain", "Richland-Chambers", "Fayetteville", "Maumelle")), scales = "free")+
+  #scale_y_discrete(breaks = levels(res_rmse_df$lake),labels = levels(res_rmse_df$lake))+
+  theme_fig4+
+  guides(color = "none")+
+  xlab("Season")
+seas_rmse.p2
+
+ggsave(plot = seas_rmse.p2,here("Predictive_Models/figures/Fig4_SeasonalRMSE.jpeg"), height = 6, width = 10, units = "in")
+emmeans(m1, pairwise ~depth_cat*season, by = "lake")|>pluck("contrasts")|>broom::tidy(conf.int = TRUE)|>filter(adj.p.value <= 0.05)
+```
+  
+
+## Mixing LME
+```{r model setup}
+rmse_schm.df<-res_schm_sums|>select(lake,val_period, doy,schm.stab_sd)|>filter(!is.na(val_period))|>mutate(val_period = as_factor(val_period))|>
+  right_join(res_rmse_df)|>filter(!is.na(schm.stab_sd))
+
+schm_lme <- gls(data = rmse_schm.df, rmse ~ schm.stab_sd*lake*depth_cat, na.action = "na.omit",
+                correlation = corAR1(form = ~doy|corr_group2),
+                weights = varIdent(form = ~1|corr_group2)) 
+
+schm_lme2 <- lme(data = rmse_schm.df, rmse ~ schm.stab_sd*lake*depth_cat, na.action = "na.omit", #only drops ~10 obs in total
+                 random = ~1|corr_group2, 
+                 correlation = corAR1(form = ~doy|corr_group2),
+                weights = varIdent(form = ~1|corr_group2), 
+                 control = lmeControl(opt = "optim", optimMethod = "L-BFGS-B"))
+                
+# models with G or R side effects with a more complex ARMA structure won't fit. Models with just more complex ARMA errors very unmfavored by AIC 
+
+
+# plot resids by covariates
+plot(resid(schm_lme, type = "normalized"))
+plot(resid(schm_lme2, type = "normalized"))
+
+plot(ACF(schm_lme2, resType = "normalized"))
+
+AIC(schm_lme, schm_lme2)
+ggplot()+
+  geom_boxplot(aes(x = rmse_schm.df$val_period, y = resid(schm_lme2, type = "normalized"))) # error variances pretty equal
+
+ggplot()+
+  geom_boxplot(aes(x = rmse_schm.df$depth_cat, y = resid(schm_lme2, type = "normalized")))
+
+ggplot()+
+  geom_boxplot(aes(x = rmse_schm.df$lake, y = resid(schm_lme2, type = "normalized")))
+
+ggplot()+
+  geom_point(aes(x = rmse_schm.df$schm.stab_sd, y = resid(schm_lme2, type = "normalized")))
+
+ggplot()+
+  geom_histogram(aes(resid(schm_lme2))) 
+```
+
+
+```{r emmeans, contrasts, and Fig 5}
+
+joint_tests(schm_lme2)
+em_t <- emtrends(schm_lme2, specs = ~ lake|depth_cat, var = "schm.stab_sd", mode = "containment")|>tidy(conf.int = TRUE) # easy way to check significance of slopes 
+#plotting predictions a little more difficult - following Bolker's GLMM FAQ here
+## note that expand.grid() orders factor levels by *order of
+## appearance* -- must match levels(rmse_schm.df$lake, etc.)
+newdat <- rmse_schm.df|>group_by(lake)|>slice_max(schm.stab_sd,n = 1, with_ties = FALSE)|>
+  select(lake, schm.stab_sd)|>mutate(max = ceiling(schm.stab_sd))|>select(-schm.stab_sd)|>
+  expand_grid(depth_cat = levels(rmse_schm.df$depth_cat))|> 
+  rowwise() |> 
+  transmute(lake, depth_cat, schm.stab_sd = list(seq(1, max))) |> 
+  unnest_longer(schm.stab_sd)
+
+          
+newdat$pred <- predict(schm_lme2, newdat, level = 0) #level 0 means population estimates - won't matter if not using RE
+
+## [-2] drops response from formula
+Designmat <- model.matrix(formula(schm_lme2)[-2], newdat)
+predvar <- diag(Designmat %*% vcov(schm_lme2) %*% t(Designmat)) 
+newdat$SE <- sqrt(predvar) 
+newdat$SE2 <- sqrt(predvar+schm_lme2$sigma^2) #would be used for prediction intervals
+
+
+
+theme_fig5 <- theme_classic()+
+    theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 16,face = "bold"),
+          axis.text.y = element_text(size = 16, face = "bold"),
+          axis.title.y = element_text(size = 22, face = "bold"),
+          axis.title.x = element_text(size = 20, face = "bold"),
+          strip.text.x = element_text(size = 18, face = "bold"),
+          strip.text.y = element_text(size = 15, face = "bold"),
+          legend.text = element_text(size = 20, face = "bold"),
+          legend.title = element_blank(),
+          legend.position = c(0.85,0.8),
+          panel.grid.major = element_blank(), panel.grid.minor = element_blank(),panel.background = element_blank()) 
+
+pd <- position_dodge(width=0.4) 
+g0 <- ggplot()+ 
+  geom_point(data = rmse_schm.df, aes(x = schm.stab_sd, y = rmse, color = depth_cat))+
+  geom_line(data=newdat, aes(x=schm.stab_sd,y=pred,color=depth_cat))+ 
+  geom_line(data=newdat, aes(x=schm.stab_sd,y=pred-1.96*SE,color=depth_cat))+
+  geom_line(data=newdat, aes(x=schm.stab_sd,y=pred+1.96*SE,color=depth_cat))+
+  facet_grid(factor(lake, levels= c("Eagle Mountain", "Richland-Chambers", "Fayetteville", "Maumelle"))~factor(depth_cat, levels= c("Surface", "Middle", "Bottom")), scales = "free")+
+  xlab(expression(bold(paste("Mixing (Schmidt Stability ", sigma, ")"))))+
+  ylab("RMSE")+
+  scale_color_jco()+
+  theme_fig5+
+  guides(color = "none")
+
+g0
+
+ggsave(plot = g0,here("Predictive_Models/figures/Fig5_PolymixyRMSE.jpeg"), height = 10, width = 10, units = "in")
+
+```
+
+
+# SHAP comparison - Predictor importance
+
+```{r}
+#collect SHAP files
+rc_shap <- read_csv(here("Predictive_Models/RC_SHAP_vals.csv"))|>mutate(lake = "Richland-Chambers")
+em_shap <- read_csv(here("Predictive_Models/EM/SHAP_vals.csv"))|>mutate(lake = "Eagle Mountain")
+fay_shap <- read_csv(here("Predictive_Models/Fayetteville/SHAP_vals.csv"))|>mutate(lake = "Fayetteville")
+maum_shap <- read_csv(here("Predictive_Models/Maumelle/SHAP_vals.csv"))|>mutate(lake = "Maumelle")
+
+all_shap <- bind_rows(rc_shap, em_shap, fay_shap, maum_shap)|>
+  select(-group_number)|>
+   mutate(val_period = as_factor(val_period),
+        lake = as_factor(lake),
+         lake = fct_relevel(lake, "Eagle Mountain", "Richland-Chambers", "Fayetteville", "Maumelle"),
+        season = case_when(lake == "Eagle Mountain" & val_period %in% c(3:7) ~ "Warm",
+                           lake == "Richland-Chambers" & val_period %in% c(3:7) ~ "Warm",
+                           lake == "Fayetteville" & val_period %in% c(2:8) ~ "Warm",
+                           lake == "Maumelle" & val_period %in% c(2:8) ~ "Warm",
+                           .default = "Cool"),
+        depth_cat = case_when(lake == "Eagle Mountain" & Depth_m_raw == 10 ~ "Bottom",
+                           lake == "Richland-Chambers" & Depth_m_raw == 10 ~ "Bottom",
+                           lake == "Fayetteville" & Depth_m_raw == 8.5 ~ "Bottom",
+                           lake == "Maumelle" & Depth_m_raw == 9 ~ "Bottom",
+                           Depth_m_raw == 0 ~ "Surface",
+                           Depth_m_raw == 5 ~ "Middle"),
+        depth_cat = as_factor(depth_cat),
+        depth_cat = fct_relevel(depth_cat, "Surface", "Middle", "Bottom"))|>
+  mutate(across(1:11, abs))|> #absolute shap values
+  mutate(`Wind_S&W` = WWind_m.s+SWind_m.s,
+         Dewpoint_and_Pressure = DewPoint_C + Pressure_hPa,
+         .keep = "unused", .before = Datetime)|>
+  #left_join(res_preds|>select(val_period, lake, season, depth_cat,Datetime))|>
+  mutate(sum_shap = rowSums(across(2:9)))|>
+  mutate(across(2:9, ~./sum_shap*100))
+
+
+  
+agg_shap <- all_shap|>
+  pivot_longer(cols = c(1:9), names_to = "variable", values_to = "abs_SHAP")|>
+  mutate(variable = as_factor(variable))|>
+  mutate(doy = yday(Datetime))|>
+  group_by(doy, season, Depth_m_raw, depth_cat, val_period,variable, lake)|>
+  summarise(SHAP = mean(abs_SHAP))|>
+  mutate(grouping = str_c(lake,season,depth_cat, variable,val_period,sep = "_"))|>
+  filter(doy >5)|>
+  mutate(season = as_factor(season),
+         grouping = as_factor(grouping))
+  #group_by(lake, season, depth_cat, Depth_m_raw, variable)|>
+  #summarize(mean_shap = mean(abs_SHAP), var_shap = var(abs_SHAP)) #average the absolute shap values by time periods of interest
+```
+
+
+```{r model shap}
+
+agg_shap2 <- agg_shap|>filter(variable!="none")
+shap.m1<-gls(data = agg_shap2, SHAP ~ variable*lake*season*depth_cat, 
+            weights = varIdent(~1|variable*lake*season*depth_cat),
+             correlation = corAR1(form = ~doy|grouping)) 
+shap.m2<-gls(data = agg_shap2, SHAP ~ variable*lake*season*depth_cat, 
+             correlation = corAR1(form = ~1|grouping)) 
+shap.m3<-lme(data = agg_shap2, SHAP ~ variable*lake*season*depth_cat,
+             random = ~1|grouping,
+             weights = varIdent(~1|variable*lake*season*depth_cat),
+             correlation = corAR1(form = ~doy|grouping)) 
+shap.m4<-lme(data = agg_shap2, SHAP ~ variable*lake*season*depth_cat,
+             random = ~1|grouping,
+             weights = varIdent(~1|variable*lake*season*depth_cat),
+             correlation = corARMA(p = 5, q = 0, form = ~doy|grouping), 
+                 control = lmeControl(opt = "optim", optimMethod = "L-BFGS-B")) 
+shap.m5<-lme(data = agg_shap2, SHAP ~ variable*lake*season*depth_cat,
+             random = ~1|grouping,
+             weights = varIdent(~1|variable*lake*season*depth_cat),
+             correlation = corARMA(p = 5, q = 2, form = ~doy|grouping), 
+                 control = lmeControl(opt = "optim", optimMethod = "L-BFGS-B")) 
+shap.m6<-lme(data = agg_shap2, SHAP ~ variable*lake*season*depth_cat,
+             random = ~1|grouping,
+             weights = varIdent(~1|variable*lake*season*depth_cat),
+             correlation = corARMA(p = 10, q = 0, form = ~doy|grouping), 
+                 control = lmeControl(opt = "optim", optimMethod = "L-BFGS-B")) 
+AIC(shap.m1,shap.m2,shap.m3,shap.m4,shap.m5, shap.m6)
+plot(ACF(shap.m4, resType = "normalized"), alpha = 0.05)
+
+shap.p<-ggplot(data = agg_shap)+
+  geom_point(aes(x = fct_reorder(variable, mean_shap), y = mean_shap, color = season))+
+  geom_errorbar(aes(x = fct_reorder(variable, mean_shap), ymin = mean_shap-sqrt(var_shap),ymax = mean_shap+sqrt(var_shap), color = season))+
+  facet_grid(lake~depth_cat, scales = "free_y")+
+  scale_color_jco()+
+  mytheme_fig3+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.2))
+
+
+ggplot()+
+  geom_point(data = all_shap|>filter(val_period %in% c(1,5))|>filter(!(yday(Datetime) < 10)), aes(x = yday(Datetime), y = abs(`Wind_S&W`)))+
+  facet_grid(lake~depth_cat)
+
+joint_tests(shap.m4)
+sm1_em <- emmeans(shap.m4, ~season*lake*depth_cat*variable)
+sm1_pw <- contrast(sm1_em, "pairwise", by = c("lake", "depth_cat", "variable"))|>broom::tidy(conf.int = TRUE)|>filter(p.value <= 0.05)
+sm1_pw2 <- contrast(sm1_em, "pairwise", by = c("lake", "variable", "season"))|>broom::tidy(conf.int = TRUE)|>filter(adj.p.value <= 0.05)
+sm1_pw
+sm1_em_tidy <- emmeans(shap.m4, ~season*lake*depth_cat*variable)|>broom::tidy(conf.int = TRUE)|>
+  mutate(depth_cat = as_factor(depth_cat), season = as_factor(season), variable = as_factor(variable), lake = as_factor(lake))
+
+setequal(levels(sm1_em_tidy$depth_cat), levels(agg_shap2$depth_cat))
+
+sm_lv <- emmeans(shap.m4, ~lake*variable)
+sm_lvt <- sm_lv|>broom::tidy(conf.int = TRUE)|>arrange(variable, estimate)
+sm_var <- emmeans(shap.m4, ~variable)|>broom::tidy(conf.int = TRUE)|>arrange(variable, estimate)
+sm1_pw2 <- contrast(sm_lv, "pairwise", simple = "lake")|>broom::tidy(conf.int = TRUE)|>filter(adj.p.value <= 0.05)
+sm_var2 <- emmeans(shap.m4, ~variable*season*lake)|>broom::tidy(conf.int = TRUE)|>arrange(variable, estimate)
+sm_var3 <- contrast(emmeans(shap.m4, ~variable*season*lake), "pairwise", simple = "lake")|>broom::tidy(conf.int = TRUE)|>filter(adj.p.value <= 0.05)
+sm_var4 <- contrast(emmeans(shap.m4, ~variable*season*lake), "pairwise", simple = c("season"))|>broom::tidy(conf.int = TRUE)|>filter(adj.p.value <= 0.05)
+sm_var5 <- contrast(emmeans(shap.m4, ~variable*season*depth_cat*lake), "pairwise", simple = c("season"))|>broom::tidy(conf.int = TRUE)|>filter(adj.p.value <= 0.05)
+
+
+theme_fig6 <-   theme_classic()+
+    theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 16,face = "bold"),
+          axis.text.y = element_text(size = 16, face = "bold"),
+          axis.title.y = element_text(size = 18, face = "bold"),
+          axis.title.x = element_blank(),
+          strip.text = element_text(size = 16, face = "bold"),
+          legend.text = element_text(size = 20, face = "bold"),
+          legend.title = element_blank(),
+          panel.grid.major = element_blank(), panel.grid.minor = element_blank(),panel.background = element_blank())  
+
+seas_shap.p<-ggplot()+
+  geom_jitter(data = agg_shap2, aes(x = variable, y = SHAP, color = season, group = season), alpha = 0.3, position = position_dodge(width = 0.55))+
+  geom_point(data = sm1_em_tidy, aes(x = variable, y = estimate, color = season, group = season),color = "black",size = 2.5, alpha = 0.9, position = position_dodge(width = 0.55))+
+  geom_errorbar(data = sm1_em_tidy,aes(x = variable, ymin = conf.low, ymax = conf.high, group = season),  color = "black", width = 0.3, position = position_dodge(width = 0.55))+
+  scale_color_jco()+
+  ylab("SHAP")+
+  facet_grid(factor(lake, levels= c("Eagle Mountain", "Richland-Chambers", "Fayetteville", "Maumelle"))~factor(depth_cat, levels= c("Surface", "Middle", "Bottom")), scales = "free")+
+  #scale_y_discrete(breaks = levels(res_rmse_df$lake),labels = levels(res_rmse_df$lake))+
+  theme_fig6+
+  #guides(color = "none")+
+  NULL
+seas_shap.p
+
+ggsave(plot = seas_shap.p, here("Predictive_Models/figures/FigSx_SHAP.jpeg"), height = 10, width = 10, units = "in")
+
+```
+
+```{r}
+
+focal_vars <- c("Wind_S&W", "WaterTemp_C", "Depth_m")
+seas_shap.p2<-ggplot()+
+  geom_jitter(data = agg_shap2|>filter(variable %in% focal_vars)|>mutate(variable = fct_recode(variable, Wind = "Wind_S&W", `Water Temp` = "WaterTemp_C", Depth = "Depth_m")), aes(x = season, y = SHAP,  shape = depth_cat,color = depth_cat), alpha = 0.2, position = position_dodge(width = 0.55))+
+  geom_point(data = sm1_em_tidy|>filter(variable %in% focal_vars)|>mutate(variable = fct_recode(variable, Wind = "Wind_S&W", `Water Temp` = "WaterTemp_C", Depth = "Depth_m")), aes(x = season, y = estimate,  shape = depth_cat, group = depth_cat), color = "black",size = 3, alpha = 1, position = position_dodge(width = 0.55))+
+  geom_errorbar(data = sm1_em_tidy|>filter(variable %in% focal_vars)|>mutate(variable = fct_recode(variable, Wind = "Wind_S&W", `Water Temp` = "WaterTemp_C", Depth = "Depth_m")),aes(x = season, ymin = conf.low, ymax = conf.high, group = depth_cat), color = "black",   width = 0.3, position = position_dodge(width = 0.55))+
+  scale_color_jco()+
+  ylab("Normalized SHAP (%)")+
+  facet_grid(variable~factor(lake, levels= c("Eagle Mountain", "Richland-Chambers", "Fayetteville", "Maumelle")), scales = "free")+
+  theme_fig6+
+  NULL
+seas_shap.p2
+
+seas_shap.p3<-ggplot()+
+  geom_jitter(data = agg_shap2|>filter(variable %in% focal_vars)|>mutate(variable = fct_recode(variable, Wind = "Wind_S&W", `Water Temp` = "WaterTemp_C", Depth = "Depth_m")), aes(x = season, y = SHAP,  shape = lake,fill = lake), alpha = 0.2, position = position_dodge(width = 0.55))+
+  geom_point(data = sm1_em_tidy|>filter(variable %in% focal_vars)|>mutate(variable = fct_recode(variable, Wind = "Wind_S&W", `Water Temp` = "WaterTemp_C", Depth = "Depth_m")), aes(x = season, y = estimate,  shape = lake, fill = lake, group = lake), size = 3, alpha = 1, position = position_dodge(width = 0.55))+
+  geom_errorbar(data = sm1_em_tidy|>filter(variable %in% focal_vars)|>mutate(variable = fct_recode(variable, Wind = "Wind_S&W", `Water Temp` = "WaterTemp_C", Depth = "Depth_m")),aes(x = season, ymin = conf.low, ymax = conf.high, group = lake), color = "black",   width = 0.3, position = position_dodge(width = 0.55))+
+  scale_shape_manual(values = c(21,22,23,24))+
+  scale_fill_jco()+
+  ylab("Normalized SHAP (%)")+
+  facet_grid(variable~depth_cat, scales = "free")+
+  theme_fig6+
+  NULL
+seas_shap.p3
+
+ggsave(plot = seas_shap.p3, here("Predictive_Models/figures/Fig6_SHAP.jpeg"), height = 6, width = 12, units = "in")
+#analysis is abs shap values by season, lake, depth 
+# Have to normalize to difference between prediction and mean prediction 
+# SHAP must add up to that difference
+# can normalize to that difference - must join predictions, subtract from mean, divide shap by that difference
+#- suspect no substantial differences, but interesting to look at diffs by lake especially
+```
+ 
+```{r SHAP x polymixis}
+#join shap data frame to Schmidt
+
+shap_stab <- right_join(res_schm_sums|>mutate(val_period = as_factor(val_period)), agg_shap, by = c("lake", "doy", "val_period"))|>
+  filter(variable %in% c("Wind_S&W", "Depth_m", "WaterTemp_C"))|>
+  drop_na()|>
+  droplevels()
+
+
+
+schmshap_lme <- gls(data = shap_stab, SHAP ~ schm.stab_sd*lake*depth_cat*variable, na.action = "na.omit",
+                correlation = corAR1(form = ~doy|grouping),
+                weights = varFixed(~schm.stab_sd)) 
+
+schmshap_lme2 <- gls(data = shap_stab, SHAP ~ schm.stab_sd*lake*depth_cat*variable, na.action = "na.omit",
+                correlation = corAR1(form = ~doy|grouping),
+                weights = varIdent(~1|grouping)) 
+
+schmshap_lme3 <- lme(data = shap_stab, SHAP ~ schm.stab_sd*lake*depth_cat*variable, na.action = "na.omit", 
+                 random = ~1|grouping, 
+                 correlation = corAR1(form = ~doy|grouping),
+                #weights = varIdent(form = ~1|grouping), 
+                 control = lmeControl(opt = "optim", optimMethod = "L-BFGS-B"))
+
+
+                
+# Models with random, correlation, and variance weighting won't fit, neither will combos with random intercept and variance weighting
+
+
+# plot resids by covariates
+plot(resid(schmshap_lme, type = "normalized"))
+plot(resid(schmshap_lme2, type = "normalized"))
+plot(resid(schmshap_lme3, type = "normalized")) # best resids
+plot(ACF(schmshap_lme3, resType = "normalized"))
+
+AIC(schmshap_lme, schmshap_lme2,schmshap_lme3)
+```
+
+
+```{r}
+
+ggplot()+
+  geom_boxplot(aes(x = shap_stab$depth_cat, y = resid(schmshap_lme3, type = "normalized")))
+
+ggplot()+
+  geom_boxplot(aes(x = shap_stab$lake, y = resid(schmshap_lme3, type = "normalized")))
+
+ggplot()+
+  geom_point(aes(x = shap_stab$schm.stab_sd, y = resid(schmshap_lme3, type = "normalized")))
+
+ggplot()+
+  geom_histogram(aes(resid(schmshap_lme3))) #not bad fit!
+
+em_t <- emtrends(schmshap_lme3, specs = ~ lake|depth_cat*variable, var = "schm.stab_sd", mode = "containment")|>tidy(conf.int = TRUE)
+em_t.l <- emtrends(schmshap_lme3.l, specs = ~ lake|depth_cat*variable, var = "schm.stab_sd", mode = "containment")|>tidy(conf.int = TRUE)# easy way to check significance of slopes
+
+#plotting predictions a little more difficult - following Bolker's GLMM FAQ here
+## note that expand.grid() orders factor levels by *order of
+## appearance* -- must match levels(shap_stab$lake, etc.)
+
+newdat <- shap_stab|>group_by(lake)|>slice_max(schm.stab_sd,n = 1, with_ties = FALSE)|>
+  select(lake, schm.stab_sd)|>mutate(max = ceiling(schm.stab_sd))|>select(-schm.stab_sd)|>
+  expand_grid(depth_cat = levels(shap_stab$depth_cat), variable = levels(shap_stab$variable))|> 
+  rowwise() |> 
+  transmute(lake, depth_cat,variable, schm.stab_sd = list(seq(1, max))) |> 
+  unnest_longer(schm.stab_sd)
+
+          
+newdat$pred <- predict(schmshap_lme3, newdat, level = 0) #level 0 means population estimates - won't matter if not using RE
+
+## [-2] drops response from formula
+Designmat <- model.matrix(formula(schmshap_lme3)[-2], newdat)
+predvar <- diag(Designmat %*% vcov(schmshap_lme3) %*% t(Designmat)) 
+newdat$SE <- sqrt(predvar) 
+newdat$SE2 <- sqrt(predvar+schmshap_lme3$sigma^2) #would be used for prediction intervals
+
+pd <- position_dodge(width=0.4) 
+g0 <- ggplot()+ 
+  geom_point(data = shap_stab, aes(x = schm.stab_sd, y = SHAP, color = depth_cat), alpha = 0.2)+
+  geom_line(data=newdat, aes(x=schm.stab_sd,y=pred,color=depth_cat), linewidth = 1)+ 
+  geom_line(data=newdat, aes(x=schm.stab_sd,y=pred-1.96*SE,color=depth_cat), linetype = "dashed")+
+  geom_line(data=newdat, aes(x=schm.stab_sd,y=pred+1.96*SE,color=depth_cat), linetype = "dashed")+
+  facet_grid(factor(lake, levels= c("Eagle Mountain", "Richland-Chambers", "Fayetteville", "Maumelle"))~ factor(variable, levels =  c("Depth_m","WaterTemp_C","Wind_S&W")), scales = "free")+
+  mytheme_fig2+
+  #xlab(expression(bold(paste("Polymixis (Schmidt Stability ", sigma^{2}, ")"))))+
+  xlab(expression(bold(paste("Mixing (Schmidt Stability ", sigma, ")"))))+
+  ylab("Normalized SHAP (%)")+
+  scale_color_jco()+
+  theme(axis.text.x = element_text(size = 15), axis.title.x = element_text(size = 20, face = "bold"))+
+  guides(color = "none")
+
+g0
+
+ggsave(plot = g0,here("Predictive_Models/figures/Fig7_PolymixySHAP.jpeg"), height = 10, width = 10, units = "in")
+```
+
+
+
+```{}
+res_rmse <- res_preds|>
+  group_by(lake, val_period, season, depth_cat)|>
+  rmse(truth = DO_mg.L, estimate = .pred)|>
+  left_join(res_preds|>
+              group_by(lake, val_period, Depth_m)|>
+              summarize(sd_do = sd(DO_mg.L)))|>
+  mutate(nrmse = .estimate/sd_do)
+# how to normalize rmse...
+
+res_rmse_sum <- res_rmse|>
+  group_by(lake)|>
+  summarize(rmse_high = max(.estimate),
+            rmse_low = min(.estimate),
+            rmse_mean = mean(.estimate),
+            rmse_med = median(.estimate))
+            
+#calculate rmse across lake variance - 
+rmse_by_lake <- res_rmse|>
+  group_by(lake)|>
+  summarize(variance = var(.estimate))
+
+rmse_by_lake_fay4 <- res_rmse|>
+  filter(!(val_period == 4 & lake == "Fayetteville"))|>
+  group_by(lake)|>
+  summarize(variance = var(.estimate))
+
+rmse_across_depth <- res_rmse|>
+  group_by(lake, season)|>
+  summarize(variance = var(.estimate))
+
+rmse_across_depth|>
+   group_by(lake)|>
+  summarize(var_high = max(variance),
+            var_low = min(variance),
+            var_mean = mean(variance),
+            var_med = median(variance))|>
+  ggplot()+
+  geom_point(aes(x = lake, y = var_mean))+
+  geom_errorbar(aes(x = lake, ymax = var_high, ymin = var_low))
+
+rmse_by_depth|>
+   group_by(lake)|>
+  summarize(var_high = max(variance),
+            var_low = min(variance),
+            var_mean = mean(variance),
+            var_med = median(variance))|>
+  ggplot()+
+  geom_point(aes(x = lake, y = var_mean))+
+  geom_errorbar(aes(x = lake, ymax = var_high, ymin = var_low))
+```
+Maumelle was generally the best predicted reservoir, with a median rmse of 0.54, and some prediction periods/depths nearly perfectly predicted. Richland-Chambers and Fayetteville were more poorly predicted, on average, however Fayetteville prediction error was generally poor. Eagle Mountain and Maumelle, a large polymictic and large monomictic reservoirs, respectively, had the lowest variability in model error. Fayetteville had large variance, even when removing a particularly poorly predicted validation period. 
+
+
+```{r}
+pal_2 <- c(pal_jco()(10)[5],pal_jco()(10)[9])
+
+res_rmse2 <- res_rmse|>ungroup()|>filter(!is.na(depth_cat))
+
+
+
+summary(lm(data = res_rmse2, rmse ~ Depth_m))
+m1<-gls(data = res_rmse2, .estimate ~ lake*depth_cat*season)
+m2<-gls(data = res_rmse2, .estimate ~ lake*depth_cat*season, weights = varIdent(form = ~season|lake))
+AIC(m1,m2)
+
+trends<-
+  emmeans(m2, ~ lake*depth_cat*season, by = c("lake", "depth_cat"), mode = "satterthwaite")
+contrast(trends, method = "pairwise", by = c("lake", "depth_cat"))
+summary(trends)
+
+
+
+abun.con <-emmeans(ref_grid(abund.model), ~Color)
+lm_em <- abun.con|>tidy(conf.int = TRUE)
+
+ggplot(res_rmse2)+
+  geom_boxplot(aes(x = depth_cat, y = .estimate, fill = season))+
+  facet_grid(.~lake)+
+  scale_fill_manual(values = pal_2)+
+  theme_bw()
+```
+At EM and Maumelle, most variation attributable to predictions made in different time periods. At Fayetteville, variation in prediction error often a function of depth (depth explained lots of variation). 
+
+Withing each lake, there's no consistent pattern of any depth being less predictable than another - it varies by validation period. During the summer depth X tended to be less predictable. 
+
+What are the worst predicted periods for each lake and what characterizes them? 
+
+
+```{r Fig 4 RMSE across reservoirs}
+
+
+
+lm.p <- ggplot()+
+  geom_errorbar(data = res_rmse_sum, aes(ymin = rmse_low, ymax = rmse_high, x = lake, color = lake), position = position_dodge(width = 0.7),width = 0.25, size = 1, alpha = 0.5) +
+  geom_point(data = res_rmse_sum, aes(y=rmse_mean, x = lake, color = lake), size = 5, alpha = 0.5,position = position_dodge(width = 0.7))+
+  #geom_point(data = res_rmse_sum, aes(x = lake, y = Abundance, lake = lake, shape = Date),alpha = 1, position = position_dodge(width = 0.7))+
+  scale_color_jco()+
+  guides(lake = guide_legend("lake"))+
+  theme_bw()+
+  theme(axis.text.x = element_text(face = "bold", size = 11), 
+        axis.text.y = element_text(face = "bold", size = 11), 
+        axis.title.x = element_text(face = "bold", size = 14),
+        axis.title.y = element_text(face = "bold", size = 14),
+        legend.title = element_text(face = "bold", size = 12))
+lm.p
+
+rmse_overall.p <- res_rmse|>
+  ggplot(aes(x= .estimate, y = lake, fill = lake))+
+  scale_fill_jco(guide = FALSE)+
+  stat_halfeye()+
+  xlab("RMSE")+
+  mytheme_fig3+
+  theme(axis.title.y = element_blank(), legend.title = element_blank(), axis.title.x = element_text(size = 20, face = "bold"))
+rmse_overall.p
+
+
+ rmse_period.p <- res_rmse|>
+  filter(Depth_m == round(Depth_m))|>
+  ggplot()+
+  geom_boxplot(aes(x = lake, y = .estimate, fill = val_period), outlier.shape = 21, color = "black")+
+   #geom_point(aes(x = lake, y = .estimate))+
+    ylab("RMSE")+
+    labs(fill = "Period")+
+   scale_color_jco()+
+   #facet_wrap(.~lake)
+    mytheme_fig3 +
+    theme(axis.title.x = element_blank(), legend.key.height = unit(0.4, "in"))
+rmse_period.p  
+```
+
+

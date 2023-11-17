@@ -1,0 +1,524 @@
+---
+title: "Multimodel_RC_comparison"
+output: html_document
+date: "2023-08-31"
+---
+This analysis was built in R 4.2.1. Attempts in R 4.3.1 didn't collect predictions correctly. 
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(lubridate)
+library(ggsci)
+library(cowplot)
+library(tidymodels)
+library(emmeans)
+library(ncdf4)
+library(mgcv)
+library(rLakeAnalyzer)
+library(nlme)
+library(here)
+
+
+here::i_am("Predictive_Models/Multimodel_RC_comparison.Rmd")
+
+```
+
+
+#load validation data
+```{r}
+#RC_train <- read_csv("RC_pred_highfreq_training.csv")
+
+#RC_validation <- read_csv("RC_pred_validation.csv")
+
+
+#rc_split <- make_splits(RC_train,assessment = RC_validation)
+
+RC_all <- read_csv(here("Predictive_Models/RC_pred_alldata.csv"))
+
+```
+
+#Generate predictions for saved Tidymodels
+These were models selected in HighFreq_Trained_Models
+The final selected model workflows are saved as .RDS, then re-loaded here
+Example for "blah.rds" would then be predict(blah, data = validation_data)
+
+
+```{r linear}
+lm_fit <- readRDS(here("Predictive_Models/trained_workflows/lm_highfreq_fit.rds"))
+
+final_lm <- last_fit(lm_fit, rec_split) #rec_split needs to be loaded from Create_Recipes.Rmd
+lm_data <- final_lm[[1]][[1]][["data"]]
+final_lm_metrics <- final_lm |> 
+  collect_metrics()
+
+final_lm_preds <- final_lm |>
+  collect_predictions()|>
+  bind_cols(lm_data|>select(-DO_mg.L)|>filter(!is.na(val_period)))
+
+
+final_lm_preds |> 
+ggplot()+
+  geom_point(aes(x = .pred, y = DO_mg.L))+
+  ylab("Observed DO (mg/L)")+
+  xlab("Predicted DO (mg/L)")+
+  coord_obs_pred()
+
+lm_1m<-final_lm_preds|>
+  filter(Depth_m == 1)|>
+ggplot()+
+  geom_point(aes(x = Datetime, y = .pred))+
+  geom_line(aes(x = Datetime, y = DO_mg.L))+
+  ylab("DO (mg/L)")+
+  xlab("Datetime")+
+  facet_wrap(.~val_period, scales = "free")
+
+#calculate grouped rmse
+lm_rmse <- final_lm_preds|>
+  mutate(Depth_m = as_factor(Depth_m), val_period = as_factor(val_period))|>
+  group_by(Depth_m, val_period, Datetime)|>
+  rmse(truth = DO_mg.L, estimate = .pred)|>
+  mutate(model_type = "Regression")
+
+```
+
+```{r lasso}
+
+lasso_fit <- readRDS(here("Predictive_Models/trained_workflows/lasso_final.rds"))
+
+final_lasso <- last_fit(lasso_fit, rec_split)
+final_lasso_metrics <- final_lasso |> 
+  collect_metrics()
+
+final_lasso_preds <- final_lasso |>
+  collect_predictions()|>
+  bind_cols(testing(rec_split)|>select(-DO_mg.L))|>
+  filter(!is.na(val_period))
+  
+
+final_lasso_preds |> 
+ggplot()+
+  geom_point(aes(x = .pred, y = DO_mg.L))+
+  ylab("Observed DO (mg/L)")+
+  xlab("Predicted DO (mg/L)")+
+  coord_obs_pred()
+
+final_lasso_preds|>
+  filter(Depth_m == 10)|>
+ggplot()+
+  geom_point(aes(x = Datetime, y = .pred))+
+  geom_line(aes(x = Datetime, y = DO_mg.L))+
+  ylab("DO (mg/L)")+
+  xlab("Datetime")+
+  facet_wrap(.~val_period, scales = "free")
+
+lasso_rmse <- final_lasso_preds|>
+  mutate(Depth_m = as_factor(Depth_m), val_period = as_factor(val_period))|>
+  group_by(Depth_m, val_period, Datetime)|>
+  rmse(truth = DO_mg.L, estimate = .pred)|>
+  mutate(model_type = "Lasso")
+
+```
+# Random Forest
+```{r}
+
+final_randfor<-readRDS("trained_workflows/randfor_fit.Rds") #randfor_fit  is not specifically a workflow - this has already had last_fit() run on it because we had to specify the exact lag6 recipe for the final fit (instead of the split object) because ranger can't handle missing values
+randfor_data <- final_randfor[[1]][[1]][["data"]]
+
+final_randfor_metrics <- final_randfor |> 
+  collect_metrics()
+
+final_randfor_preds <- final_randfor |>
+  collect_predictions()|>
+  bind_cols(randfor_data|>select(-DO_mg.L)|>filter(!is.na(val_period)))
+
+
+final_randfor_preds |> 
+ggplot()+
+  geom_point(aes(x = .pred, y = DO_mg.L))+
+  ylab("Observed DO (mg/L)")+
+  xlab("Predicted DO (mg/L)")+
+  coord_obs_pred()
+
+final_randfor_preds|>
+  filter(Depth_m == 1)|>
+ggplot()+
+  geom_point(aes(x = Datetime, y = .pred))+
+  geom_line(aes(x = Datetime, y = DO_mg.L))+
+  ylab("DO (mg/L)")+
+  xlab("Datetime")+
+  facet_wrap(.~val_period, scales = "free")
+
+
+#collect error metrics by depth
+
+randfor_rmse <- final_randfor_preds|>
+  mutate(Depth_m = as_factor(Depth_m), val_period = as_factor(val_period))|>
+  group_by(Depth_m, val_period, Datetime)|>
+  rmse(truth = DO_mg.L, estimate = .pred)|>
+  mutate(model_type = "Random Forest")
+
+randfor_rmse_summary <- randfor_rmse|>
+  group_by(Depth_m, val_period)|>
+  summarize(mean = mean(.estimate))
+
+randfor_rmse|>#mutate(Depth_m = as.numeric(Depth_m))|>
+  ggplot(aes(x = Depth_m, y = .estimate))+
+  geom_boxplot()+
+  geom_point(aes(color = val_period), size = 2)
+  
+
+
+```
+
+#Pull in predictions for LSTM and WET calibrations
+```{r read LSTM predictions}
+lstm_preds <- read_csv(here("Predictive_Models/LSTM_validation_predictions.csv"))|>
+  rename(".pred" = "DO_mg.L")|>
+  mutate(Depth_m = as_factor(Depth_m))
+
+lstm_rmse <- lstm_preds|>
+  #left_join(RC_validation|>mutate(Depth_m = as_factor(Depth_m)), by = c("Datetime", "Depth_m"))|>
+  left_join(RC_all|>filter(validation == "Testing")|>mutate(Depth_m = as_factor(Depth_m)))|>
+  mutate(Depth_m = as_factor(Depth_m), val_period = as_factor(val_period))|>
+  group_by(Depth_m, val_period, Datetime)|>
+  rmse(truth = DO_mg.L, estimate = .pred)|>
+  mutate(model_type = "LSTM")
+
+
+
+```
+
+
+
+```{r WET predictions temp and do calibrated}
+#location of WET netcdf file
+
+
+wet_nc <- nc_open("trained_workflows/wet_highfreq_best.nc")
+
+wet_do <- ncvar_get(wet_nc, "abiotic_water_sO2W")
+wet_time <- ncvar_get(wet_nc, "time")
+time_baseline <- ncatt_get(wet_nc, "time")|>pluck("units")|>str_remove("seconds since ")|>as_datetime()
+colnames(wet_do) <- wet_time
+
+wet_rmse <- wet_do|>as_tibble()|>#select(1:100)|>
+  mutate(Depth_m = 25-row_number()+0.5, .before = 1)|> #depth in file is really elevation - added 0.5 to integrate meter layer
+  filter(Depth_m <10)|>
+  mutate(Depth_m = as_factor(Depth_m))|>
+  pivot_longer(-Depth_m, names_to = "Datetime", values_to = ".pred")|>
+  mutate(Datetime = time_baseline + seconds(Datetime))|>
+  filter(Datetime > as_datetime("2021-04-19 23:00:00"))|>
+  left_join(RC_all|>filter(validation == "Testing")|>mutate(Datetime = floor_date(Datetime, "hour"),Depth_m = as_factor(Depth_m)))|>
+  mutate(Depth_m = as_factor(Depth_m), val_period = as_factor(val_period))|>
+  filter(!is.na(val_period))|>
+  group_by(Depth_m, val_period)|>
+  rmse(truth = DO_mg.L, estimate = .pred)|>
+  mutate(model_type = "WET")
+
+```
+
+```{r}
+
+wet_preds <- wet_do|>as_tibble()|>
+  mutate(Depth_m = 25-row_number(), .before = 1)|> #depth in file is really elevation -  could add 0.5 to integrate meter layer
+  filter(Depth_m <=10)|>
+  mutate(Depth_m = as_factor(Depth_m))|>
+  pivot_longer(-Depth_m, names_to = "Datetime", values_to = ".pred")|>
+  mutate(Datetime = time_baseline + seconds(Datetime))|>
+  filter(Datetime > as_datetime("2021-04-19 23:00:00"))|>
+    right_join(RC_all|>filter(validation == "Testing")|>mutate(Datetime = floor_date(Datetime, "hour"),Depth_m = as_factor(Depth_m)))|>
+  #left_join(RC_validation|>mutate(Datetime = floor_date(Datetime, "hour"),Depth_m = as_factor(Depth_m)))|>
+  mutate(.pred = ifelse(is.na(val_period), NA_real_, .pred))|>
+  select(.pred,Depth_m, DO_mg.L, Datetime, val_period)|>mutate(model = "wet")
+
+lm_preds <- final_lm_preds|>select(.pred, Datetime, Depth_m, val_period, DO_mg.L)|>mutate(Depth_m = as_factor(Depth_m))|>mutate(model = "lm")
+lasso_preds <- final_lasso_preds|>select(.pred, Datetime, Depth_m, val_period, DO_mg.L)|>mutate(Depth_m = as_factor(Depth_m))|>mutate(model = "lasso")
+randfor_preds <- final_randfor_preds|>select(.pred, Datetime, Depth_m, val_period, DO_mg.L)|>mutate(Depth_m = as_factor(Depth_m))|>mutate(model = "randfor")
+lstm_preds2<- lstm_preds|>
+  left_join(RC_all|>mutate(validation = ifelse(is.na(val_period), "Training", "Testing"))|>filter(validation == "Testing")|>mutate(Depth_m = as_factor(Depth_m)))|>
+  select(.pred, Datetime, Depth_m, val_period, DO_mg.L)|>mutate(model = "lstm")
+
+
+all_preds <- bind_rows(wet_preds, lm_preds,lasso_preds,randfor_preds,lstm_preds2)|>mutate(Datetime = floor_date(Datetime,"hour"))|>mutate(val_period = as_factor(val_period))
+
+#write_csv(all_preds, here("Predictive_Models/multimodel_predictions.csv"))
+all_preds<-read_csv(here("Predictive_Models/multimodel_predictions.csv"))
+
+
+ggplot(all_preds, aes(x = Datetime, y = .pred, color = model))+geom_point()
+
+
+multi_rmse <- all_preds|>
+  mutate(doy = yday(Datetime))|>
+  group_by(doy, model, Depth_m, val_period)|>
+  rmse(estimate = .pred, truth = DO_mg.L)|>
+  mutate(depth_cat = case_when(Depth_m == 0 ~ "Surface",
+                               Depth_m == 5 ~ "Middle",
+                               Depth_m == 10 ~ "Bottom"),
+         season = ifelse(val_period %in% c(3:7), "Warm","Cool"),
+         depth_cat = fct_relevel(depth_cat, "Surface", "Middle", "Bottom"))|>
+  filter(!is.na(depth_cat))|>
+  rename(rmse = ".estimate")
+
+
+
+
+```
+
+```{r multimod lm}
+multi_rmse2 <- multi_rmse|>
+  mutate(grouping = str_c(model, depth_cat, season,val_period))|>
+  mutate(model = fct_recode(model, LSTM = "lstm", LM = "lm", WET = "wet", `Random Forest` = "randfor", Lasso = "lasso"))|>
+  drop_na()
+
+m1 <- gls(data = multi_rmse2, rmse ~ model*depth_cat*season,
+             weights = varIdent(~1|depth_cat*season*model),
+                 control = lmeControl(opt = "optim", optimMethod = "L-BFGS-B")) 
+
+m2 <- lme(data = multi_rmse2, rmse ~ model*depth_cat*season,
+             random = ~1|grouping,
+             weights = varIdent(~1|depth_cat*season*model),
+                 control = lmeControl(opt = "optim", optimMethod = "L-BFGS-B")) 
+
+m3 <- lme(data = multi_rmse2, rmse ~ model*depth_cat*season,
+             random = ~1|grouping,
+             correlation = corARMA(p = 1, q = 0, form = ~doy|grouping), 
+                 control = lmeControl(opt = "optim", optimMethod = "L-BFGS-B")) 
+
+m4 <- lme(data = multi_rmse2, rmse ~ model*depth_cat*season,
+             random = ~1|grouping,
+             weights = varIdent(~1|depth_cat*season*model),
+             correlation = corARMA(p = 1, q = 0, form = ~doy|grouping), 
+                 control = lmeControl(opt = "optim", optimMethod = "L-BFGS-B")) 
+
+m5 <- gls(data = multi_rmse2, rmse ~ model*depth_cat*season,
+             weights = varIdent(~1|depth_cat*season*model),
+             correlation = corARMA(p = 5, q = 0, form = ~doy|grouping), 
+                 control = lmeControl(opt = "optim", optimMethod = "L-BFGS-B")) 
+
+
+
+AIC(m1,m2,m3,m4,m5) #m3,4,5 equivalent, but adding higher order correlation  (p = 5) into corARMA dropped m5 AIC a bit
+
+plot(ACF(m5, resType = "normalized"), alpha = 0.05)
+ggplot()+
+  geom_boxplot(aes(x = multi_rmse2$depth_cat, y = resid(m5, type = "normalized")))
+
+ggplot()+
+  geom_boxplot(aes(x = multi_rmse2$model, y = resid(m5, type = "normalized")))
+
+ggplot()+
+  geom_boxplot(aes(x = multi_rmse2$season, y = resid(m5, type = "normalized")))
+
+ggplot()+
+  geom_histogram(aes(resid(m5))) 
+
+```
+
+```{r}
+
+joint_tests(m5)
+sm5_em <- emmeans(m5, ~season*model*depth_cat)
+sm5_pw <- contrast(sm5_em, "pairwise", by = c("season", "depth_cat"))|>broom::tidy(conf.int = TRUE)|>filter(adj.p.value <= 0.05)
+sm5_pw2 <- contrast(sm5_em, "pairwise", by = c("depth_cat", "model"))|>broom::tidy(conf.int = TRUE)|>filter(p.value <= 0.05)
+sm5_pw
+sm5_em_tidy <- emmeans(m5, ~season*model*depth_cat)|>broom::tidy(conf.int = TRUE)|>
+  mutate(depth_cat = as_factor(depth_cat), season = as_factor(season), model = as_factor(model))
+
+theme_fig6 <-   theme_classic()+
+    theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 16,face = "bold"),
+          axis.text.y = element_text(size = 16, face = "bold"),
+          axis.title.y = element_text(size = 18, face = "bold"),
+          axis.title.x = element_blank(),
+          strip.text = element_text(size = 16, face = "bold"),
+          legend.text = element_text(size = 20, face = "bold"),
+          legend.title = element_blank(),
+          panel.grid.major = element_blank(), panel.grid.minor = element_blank(),panel.background = element_blank())  
+
+multmod_seasonal.p<-
+  ggplot()+
+  geom_jitter(data = multi_rmse2, aes(x = season, y = rmse, color = model,shape = model, fill = model,group = model), position = position_dodge(width = 0.6), alpha = 0.5)+
+  geom_point(data = sm5_em_tidy, aes(x = season, y = estimate, group = model), color = "black",size = 3, alpha = 0.9, position = position_dodge(width = 0.6))+
+  geom_errorbar(data = sm5_em_tidy,aes(x = season, ymin = conf.low, ymax = conf.high, group = model),  color = "black", width = 0.3, position = position_dodge(width = 0.6))+
+  scale_shape_manual(values = c(21,22,23,24,25))+
+  facet_wrap(depth_cat~.)+
+  scale_color_jco()+
+  scale_fill_jco()+
+  ylab("RMSE")+
+  theme_fig6
+
+ggsave(plot = multmod_seasonal.p, here("Predictive_Models/figures/Fig7_MultiMod.jpeg"), height = 6, width = 10, units = "in")
+
+```
+
+```{r calculate schmidt}
+
+rc_bathy <- read_csv(here("RC_hypsograph_for_WET.csv"), col_names = FALSE)|>
+  rename(elev_m = "X1", SA_m2 = "X2")|>
+  mutate(Depth_m = -(elev_m-25.2))|>
+  filter(Depth_m <= 10)|>
+  arrange(Depth_m)
+
+
+res_schm<- RC_all|>
+  filter(!is.na(val_period))|>
+  #create profile IDs
+  mutate(Depth_m = as_factor(Depth_m), #factor simply to facilitate flagging to ID profiles in next step - numeric later
+         zero_flags = ifelse(Depth_m == 0, TRUE, FALSE),#unifies each profile by counting each 0 m measure (start of every profile), and giving unique ID
+         sumzero_flags = cumsum(zero_flags),
+         sumzero_flags = as_factor(sumzero_flags))%>%
+  group_by(sumzero_flags)%>%
+  mutate(profileId = cur_group_id(), Datetime = first(Datetime))%>%
+  mutate(Depth_m = as.numeric(as.character(Depth_m)))%>%
+  ungroup()%>%
+  select(-zero_flags, -sumzero_flags)|>
+  filter(!(profileId %in% c(361,362,410,411,414,415,418,420,422,425,428)))|># non-complete profiles due to eqpt malfunctions
+  group_by(profileId)|>
+  mutate(Datetime = floor_date(Datetime, "hour"))|>
+  select(Datetime, val_period, profileId,WaterTemp_C, Depth_m)|>
+  group_by(Datetime,profileId, val_period)|>
+  mutate(schm.stab = schmidt.stability(wtr = WaterTemp_C, depths = Depth_m, bthA = rc_bathy$SA_m2, bthD = rc_bathy$Depth_m))|>
+  slice_head(n=1)|>
+  ungroup()|>
+  select(-WaterTemp_C, -Depth_m,-profileId)|>
+  mutate(doy = yday(Datetime))|>
+  group_by(doy, val_period)|>
+  summarize(schm.stab_sd = sd(schm.stab))
+
+#join to rmse by floored datetime
+
+schm_rmse <- multi_rmse2|>left_join(res_schm)|>
+  mutate(grouping = str_c(val_period, model,depth_cat))
+
+```
+
+```{r model rmse by mixing}
+
+
+schm_lme <- gls(data = schm_rmse, rmse ~ schm.stab_sd*model*depth_cat, na.action = "na.omit",
+                correlation = corAR1(form = ~doy|grouping),
+                weights = varIdent(form = ~1|model*depth_cat)) 
+
+schm_lme2 <- lme(data = schm_rmse, rmse ~ schm.stab_sd*model*depth_cat, na.action = "na.omit", 
+                 random = ~1|grouping, 
+                 correlation = corAR1(form = ~doy|grouping),
+                weights = varIdent(form = ~1|model*depth_cat), 
+                 control = lmeControl(opt = "optim", optimMethod = "L-BFGS-B"))
+
+schm_lme3 <- lme(data = schm_rmse, rmse ~ schm.stab_sd*model*depth_cat, na.action = "na.omit", 
+                 random = ~1|grouping,
+                 control = lmeControl(opt = "optim", optimMethod = "L-BFGS-B"))
+
+schm_lme4 <- gls(data = schm_rmse, rmse ~ schm.stab_sd*model*depth_cat, na.action = "na.omit", 
+                 correlation = corAR1(form = ~doy|grouping),
+                 control = lmeControl(opt = "optim", optimMethod = "L-BFGS-B"))
+                
+
+
+# plot resids by covariates
+plot(resid(schm_lme, type = "normalized"))
+plot(resid(schm_lme2, type = "normalized"))
+
+plot(ACF(schm_lme2, resType = "normalized"))
+
+AIC(schm_lme, schm_lme2,schm_lme3,schm_lme4)
+
+ggplot()+
+  geom_boxplot(aes(x = schm_rmse$depth_cat, y = resid(schm_lme2, type = "normalized")))
+
+ggplot()+
+  geom_boxplot(aes(x = schm_rmse$model, y = resid(schm_lme2, type = "normalized")))
+
+ggplot()+
+  geom_point(aes(x = schm_rmse$schm.stab_sd, y = resid(schm_lme2, type = "normalized")))
+
+ggplot()+
+  geom_histogram(aes(resid(schm_lme2))) 
+```
+
+
+
+```{r}
+
+joint_tests(schm_lme2)
+em_t <- emtrends(schm_lme2, data=schm_rmse, specs = ~ model|depth_cat, var = "schm.stab_sd", mode = "containment")|>tidy(conf.int = TRUE) # easy way to check significance of slopes 
+#plotting predictions a little more difficult - following Bolker's GLMM FAQ here
+## note that expand.grid() orders factor levels by *order of
+## appearance* -- must match levels(schm_rmse$model, etc.)
+newdat <- schm_rmse|>group_by(model)|>slice_max(schm.stab_sd,n = 1, with_ties = FALSE)|>
+  select(model, schm.stab_sd)|>mutate(max = ceiling(schm.stab_sd))|>select(-schm.stab_sd)|>
+  expand_grid(depth_cat = levels(schm_rmse$depth_cat))|> 
+  rowwise() |> 
+  transmute(model, depth_cat, schm.stab_sd = list(seq(1, max))) |> 
+  unnest_longer(schm.stab_sd)
+
+          
+newdat$pred <- predict(schm_lme2, newdat, level = 0) #level 0 means population estimates - won't matter if not using RE
+
+## [-2] drops response from formula
+Designmat <- model.matrix(formula(schm_lme2)[-2], newdat)
+predvar <- diag(Designmat %*% vcov(schm_lme2) %*% t(Designmat)) 
+newdat$SE <- sqrt(predvar) 
+newdat$SE2 <- sqrt(predvar+schm_lme2$sigma^2) #would be used for prediction intervals
+
+
+
+theme_fig5 <- theme_classic()+
+    theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 16,face = "bold"),
+          axis.text.y = element_text(size = 16, face = "bold"),
+          axis.title.y = element_text(size = 22, face = "bold"),
+          axis.title.x = element_text(size = 20, face = "bold"),
+          strip.text.x = element_text(size = 18, face = "bold"),
+          strip.text.y = element_text(size = 15, face = "bold"),
+          legend.text = element_text(size = 20, face = "bold"),
+          legend.title = element_blank(),
+          legend.position = c(0.85,0.8),
+          panel.grid.major = element_blank(), panel.grid.minor = element_blank(),panel.background = element_blank()) 
+
+pd <- position_dodge(width=0.4) 
+schm_rc <- ggplot()+ 
+  geom_point(data = schm_rmse, aes(x = schm.stab_sd, y = rmse, color = depth_cat))+
+  geom_line(data=newdat, aes(x= schm.stab_sd,y=pred,color=depth_cat))+ 
+  geom_line(data=newdat, aes(x= schm.stab_sd,y=pred-1.96*SE,color=depth_cat))+
+  geom_line(data=newdat, aes(x= schm.stab_sd,y=pred+1.96*SE,color=depth_cat))+
+  facet_grid(model~factor(depth_cat, levels= c("Surface", "Middle", "Bottom")), scales = "free")+
+  xlab(expression(bold(paste("Mixing (Schmidt Stability ", sigma, ")"))))+
+  ylab("RMSE")+
+  scale_color_jco()+
+  theme_fig5+
+  guides(color = "none")
+
+schm_rc
+
+ggsave(plot = schm_rc, here("Predictive_Models/figures/FigS3_rc_schm.jpeg"), height = 10, width = 10, units = "in")
+
+```
+
+It almost looks like there could be some non-linear relationships with daily schmidt variation, which might not be too surprising. We can use gamm() in mgcv to see whether there's much evidence for a non-linear relationship after 'correcting' for autocorrelation. But, it looks like there's not much evidence for that non-linear effect over a linear one.
+```{r GAM test}
+
+
+schm_gam <- gamm(data = schm_rmse, rmse ~ s(schm.stab_sd, by = interaction(model,depth_cat))+model+depth_cat, na.action = "na.omit",
+                correlation = corAR1(form = ~doy|grouping),
+                 control = lmeControl(opt = "optim", optimMethod = "L-BFGS-B")) 
+k.check(schm_gam$gam) #basis dimension k is fine
+
+newdata_gam <- expand_grid(schm.stab_sd = seq(1,50, by = 2), 
+                           model = levels(schm_rmse$model),
+                           depth_cat = levels(schm_rmse$depth_cat))
+blah <- predict(schm_gam$gam, newdata = newdata_gam, se.fit = TRUE)|>as_tibble()|>bind_cols(newdata_gam)|>
+  rename(pred = "fit", SE = "se.fit")
+
+ggplot()+ 
+  geom_point(data = schm_rmse, aes(x = schm.stab_sd, y = rmse, color = depth_cat))+
+  geom_line(data=blah, aes(x= schm.stab_sd,y=pred,color=depth_cat))+ 
+  geom_line(data=blah, aes(x= schm.stab_sd,y=pred-1.96*SE,color=depth_cat))+
+  geom_line(data=blah, aes(x= schm.stab_sd,y=pred+1.96*SE,color=depth_cat))+
+  facet_grid(model~factor(depth_cat, levels= c("Surface", "Middle", "Bottom")), scales = "free")+
+  xlab(expression(bold(paste("Mixing (Schmidt Stability ", sigma, ")"))))+
+  ylab("RMSE")+
+  scale_color_jco()+
+  theme_fig5+
+  guides(color = "none")
+```

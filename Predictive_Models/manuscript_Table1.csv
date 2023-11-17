@@ -1,0 +1,5 @@
+Reservoir,Mixing Regime,Trophic State,Mean Depth (m),Surface Area (km^2),N (Training),N (Testing),Overall R2,Overall RMSE,RMSE Min,RMSE 5%,RMSE 50%,RMSE 95%,RMSE Max
+Eagle Mountain,Polymictic,Eutrophic,6,37,23226,22596,0.79,1.36,0.04,0.18,1.06,2.37,3.73
+Richland Chambers,Polymictic,Eutrophic,8,170,26654,25939,0.74,1.61,0.02,0.1,1.06,3.02,4.58
+Fayetteville,Monomictic,Eutrophic,3,0.8,7873,8125,0.78,2.12,0.02,0.06,0.8,4.21,11.47
+Maumelle,Monomictic,Mesotrophic,7.5,36,26913,27157,0.89,0.89,0,0,0.35,2.08,4.8

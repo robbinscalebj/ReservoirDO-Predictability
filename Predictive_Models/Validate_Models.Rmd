@@ -1,0 +1,993 @@
+---
+title: "Validate_Models"
+output: html_document
+date: "2022-10-12"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(lubridate)
+library(ggsci)
+library(cowplot)
+library(tidymodels)
+library(ncdf4)
+library(statcomp)
+library(here)
+library(rLakeAnalyzer)
+library(zoo) #needed for rolling PE
+
+# Read in PE functions from Pennekamp 2019 paper
+source(here("Predictive_Models/pe_code.R"))
+```
+
+
+#load validation data
+```{r}
+RC_train <- read_csv("RC_pred_highfreq_training.csv")
+
+RC_validation <- read_csv("RC_pred_validation.csv")
+
+ggplot(RC_validation)+
+  geom_point(aes(x = Datetime, y = DO_mg.L))
+
+rc_split <- make_splits(RC_train,assessment = RC_validation)
+
+RC_all <- read_csv(here("Predictive_Models/RC_pred_alldata.csv"))|>
+  mutate(validation = ifelse(is.na(val_period), "Training", "Testing"))|>
+  #create profile IDs
+  mutate(Depth_m = as_factor(Depth_m), #factor simply to facilitate flagging to ID profiles in next step - numeric later
+         zero_flags = ifelse(Depth_m == 0, TRUE, FALSE),#unifies each profile by counting each 0 m measure (start of every profile), and giving unique ID
+         sumzero_flags = cumsum(zero_flags),
+         sumzero_flags = as_factor(sumzero_flags))%>%
+  group_by(sumzero_flags)%>%
+  mutate(profileId = cur_group_id(), Datetime = first(Datetime))%>%
+  mutate(Depth_m = as.numeric(as.character(Depth_m)))%>%
+  ungroup()%>%
+  select(-zero_flags, -sumzero_flags)
+
+  
+```
+
+#Generate predictions for saved Tidymodels
+These were models selected in HighFreq_Trained_Models
+The final selected model workflows are saved as .RDS, then re-loaded here
+Example for "blah.rds" would then be predict(blah, data = validation_data)
+
+
+```{r linear}
+lm_fit <- readRDS("trained_workflows/lm_highfreq_fit.rds")
+
+lm_fit <- best_lm_fit
+final_lm <- last_fit(lm_fit, rec_split)
+lm_data <- final_lm[[1]][[1]][["data"]]
+final_lm_metrics <- final_lm |> 
+  collect_metrics()
+
+final_lm_preds <- final_lm |>
+  collect_predictions()|>
+  bind_cols(lm_data|>select(-DO_mg.L)|>filter(!is.na(val_period)))
+
+
+final_lm_preds |> 
+ggplot()+
+  geom_point(aes(x = .pred, y = DO_mg.L))+
+  ylab("Observed DO (mg/L)")+
+  xlab("Predicted DO (mg/L)")+
+  coord_obs_pred()
+
+lm_1m<-final_lm_preds|>
+  filter(Depth_m == 1)|>
+ggplot()+
+  geom_point(aes(x = Datetime, y = .pred))+
+  geom_line(aes(x = Datetime, y = DO_mg.L))+
+  ylab("DO (mg/L)")+
+  xlab("Datetime")+
+  facet_wrap(.~val_period, scales = "free")
+
+#calculate grouped rmse
+lm_rmse <- final_lm_preds|>
+  mutate(Depth_m = as_factor(Depth_m), val_period = as_factor(val_period))|>
+  group_by(Depth_m, val_period)|>
+  rmse(truth = DO_mg.L, estimate = .pred)|>
+  mutate(model_type = "Regression")
+
+```
+
+```{r lasso}
+
+lasso_fit <- readRDS("trained_workflows/lasso_fit.rds")
+final_lasso <- last_fit(lasso_fit, rc_split)
+final_lasso_metrics <- final_lasso |> 
+  collect_metrics()
+
+final_lasso_preds <- final_lasso |>
+  collect_predictions()|>
+  bind_cols(RC_validation|>select(-DO_mg.L))|>
+  filter(!is.na(val_period))
+  
+
+final_lasso_preds |> 
+ggplot()+
+  geom_point(aes(x = .pred, y = DO_mg.L))+
+  ylab("Observed DO (mg/L)")+
+  xlab("Predicted DO (mg/L)")+
+  coord_obs_pred()
+
+final_lasso_preds|>
+  filter(Depth_m == 10)|>
+ggplot()+
+  geom_point(aes(x = Datetime, y = .pred))+
+  geom_line(aes(x = Datetime, y = DO_mg.L))+
+  ylab("DO (mg/L)")+
+  xlab("Datetime")+
+  facet_wrap(.~val_period, scales = "free")
+
+lasso_rmse <- final_lasso_preds|>
+  mutate(Depth_m = as_factor(Depth_m), val_period = as_factor(val_period))|>
+  group_by(Depth_m, val_period)|>
+  rmse(truth = DO_mg.L, estimate = .pred)|>
+  mutate(model_type = "Lasso")
+
+```
+# Random Forest
+```{r}
+
+final_randfor<-readRDS("trained_workflows/randfor_fit.Rds") #randfor_fit  is not specifically a workflow - this has already had last_fit() run on it because we had to specify the exact lag6 recipe for the final fit (instead of the split object) because ranger can't handle missing values
+randfor_data <- final_randfor[[1]][[1]][["data"]]
+
+final_randfor_metrics <- final_randfor |> 
+  collect_metrics()
+
+final_randfor_preds <- final_randfor |>
+  collect_predictions()|>
+  bind_cols(randfor_data|>select(-DO_mg.L)|>filter(!is.na(val_period)))
+
+
+final_randfor_preds |> 
+ggplot()+
+  geom_point(aes(x = .pred, y = DO_mg.L))+
+  ylab("Observed DO (mg/L)")+
+  xlab("Predicted DO (mg/L)")+
+  coord_obs_pred()
+
+final_randfor_preds|>
+  filter(Depth_m == 1)|>
+ggplot()+
+  geom_point(aes(x = Datetime, y = .pred))+
+  geom_line(aes(x = Datetime, y = DO_mg.L))+
+  ylab("DO (mg/L)")+
+  xlab("Datetime")+
+  facet_wrap(.~val_period, scales = "free")
+
+
+#collect error metrics by depth
+
+randfor_rmse <- final_randfor_preds|>
+  mutate(Depth_m = as_factor(Depth_m), val_period = as_factor(val_period))|>
+  group_by(Depth_m, val_period)|>
+  rmse(truth = DO_mg.L, estimate = .pred)|>
+  mutate(model_type = "Random Forest")
+
+randfor_rmse_summary <- randfor_rmse|>
+  group_by(Depth_m, val_period)|>
+  summarize(mean = mean(.estimate))
+
+randfor_rmse|>#mutate(Depth_m = as.numeric(Depth_m))|>
+  ggplot(aes(x = Depth_m, y = .estimate))+
+  geom_boxplot()+
+  geom_point(aes(color = val_period), size = 2)
+  
+
+
+```
+
+#Pull in predictions for LSTM and WET calibrations
+```{r read LSTM predictions}
+lstm_preds <- read_csv("LSTM_validation_predictions.csv")|>
+  rename(".pred" = "DO_mg.L")|>
+  mutate(Depth_m = as_factor(Depth_m))
+
+lstm_rmse <- lstm_preds|>
+  left_join(RC_validation|>mutate(Depth_m = as_factor(Depth_m)), by = c("Datetime", "Depth_m"))|>
+  mutate(Depth_m = as_factor(Depth_m), val_period = as_factor(val_period))|>
+  group_by(Depth_m, val_period)|>
+  rmse(truth = DO_mg.L, estimate = .pred)|>
+  mutate(model_type = "LSTM")
+
+
+
+```
+
+```{r WET predictions temp calibrated}
+#location of WET netcdf file
+
+
+wet_nc <- nc_open("trained_workflows/wet_highfreq_best.nc")
+
+wet_do <- ncvar_get(wet_nc, "abiotic_water_sO2W")
+wet_time <- ncvar_get(wet_nc, "time")
+time_baseline <- ncatt_get(wet_nc, "time")|>pluck("units")|>str_remove("seconds since ")|>as_datetime()
+colnames(wet_do) <- wet_time
+
+wet_temp_rmse <- wet_do|>as_tibble()|>#select(1:100)|>
+  mutate(Depth_m = 25-row_number()+0.5, .before = 1)|> #depth in file is really elevation - added 0.5 to integrate meter layer
+  filter(Depth_m <10)|>
+  mutate(Depth_m = as_factor(Depth_m))|>
+  pivot_longer(-Depth_m, names_to = "Datetime", values_to = ".pred")|>
+  mutate(Datetime = time_baseline + seconds(Datetime))|>
+  filter(Datetime > as_datetime("2021-04-19 23:00:00"))|>
+  left_join(RC_validation|>mutate(Datetime = floor_date(Datetime, "hour"),Depth_m = as_factor(Depth_m)))|>
+  mutate(Depth_m = as_factor(Depth_m), val_period = as_factor(val_period))|>
+  filter(!is.na(val_period))|>
+  group_by(Depth_m, val_period)|>
+  rmse(truth = DO_mg.L, estimate = .pred)|>
+  mutate(model_type = "WET_TempOnly")
+
+```
+
+```{r WET predictions temp and do calibrated}
+#location of WET netcdf file
+
+
+wet_nc <- nc_open("trained_workflows/wet_highfreq_docal_best.nc")
+
+wet_do <- ncvar_get(wet_nc, "abiotic_water_sO2W")
+wet_time <- ncvar_get(wet_nc, "time")
+time_baseline <- ncatt_get(wet_nc, "time")|>pluck("units")|>str_remove("seconds since ")|>as_datetime()
+colnames(wet_do) <- wet_time
+
+wet_rmse <- wet_do|>as_tibble()|>#select(1:100)|>
+  mutate(Depth_m = 25-row_number()+0.5, .before = 1)|> #depth in file is really elevation - added 0.5 to integrate meter layer
+  filter(Depth_m <10)|>
+  mutate(Depth_m = as_factor(Depth_m))|>
+  pivot_longer(-Depth_m, names_to = "Datetime", values_to = ".pred")|>
+  mutate(Datetime = time_baseline + seconds(Datetime))|>
+  filter(Datetime > as_datetime("2021-04-19 23:00:00"))|>
+  left_join(RC_validation|>mutate(Datetime = floor_date(Datetime, "hour"),Depth_m = as_factor(Depth_m)))|>
+  mutate(Depth_m = as_factor(Depth_m), val_period = as_factor(val_period))|>
+  filter(!is.na(val_period))|>
+  group_by(Depth_m, val_period)|>
+  rmse(truth = DO_mg.L, estimate = .pred)|>
+  mutate(model_type = "WET")
+
+```
+
+```{r}
+
+wet_preds <- wet_do|>as_tibble()|>#select(1:100)|>
+  mutate(Depth_m = 25-row_number(), .before = 1)|> #depth in file is really elevation -  could add 0.5 to integrate meter layer
+  filter(Depth_m <=10)|>
+  mutate(Depth_m = as_factor(Depth_m))|>
+  pivot_longer(-Depth_m, names_to = "Datetime", values_to = ".pred")|>
+  mutate(Datetime = time_baseline + seconds(Datetime))|>
+  filter(Datetime > as_datetime("2021-04-19 23:00:00"))|>
+  left_join(RC_validation|>mutate(Datetime = floor_date(Datetime, "hour"),Depth_m = as_factor(Depth_m)))|>
+  mutate(.pred = ifelse(is.na(val_period), NA_real_, .pred))|>
+  select(.pred,Depth_m, DO_mg.L, Datetime, val_period)|>mutate(model = "wet")
+
+lm_preds <- final_lm_preds|>select(.pred, Datetime, Depth_m, val_period, DO_mg.L)|>mutate(Depth_m = as_factor(Depth_m))|>mutate(model = "lm")
+lasso_preds <- final_lasso_preds|>select(.pred, Datetime, Depth_m, val_period, DO_mg.L)|>mutate(Depth_m = as_factor(Depth_m))|>mutate(model = "lasso")
+randfor_preds <- final_randfor_preds|>select(.pred, Datetime, Depth_m, val_period, DO_mg.L)|>mutate(Depth_m = as_factor(Depth_m))|>mutate(model = "randfor")
+lstm_preds2<- lstm_preds|>
+  left_join(RC_validation|>mutate(Depth_m = as_factor(Depth_m)), by = c("Datetime", "Depth_m"))|>select(.pred, Datetime, Depth_m, val_period, DO_mg.L)|>mutate(model = "lstm")
+
+all_preds <- bind_rows(wet_preds, lm_preds,lasso_preds,randfor_preds,lstm_preds2)|>mutate(Datetime = floor_date(Datetime,"hour"))|>mutate(val_period = as_factor(val_period))
+
+
+ggplot(all_preds, aes(x = Datetime, y = .pred, color = model))+geom_point()
+
+ensemble_rmse1 <- all_preds|>
+  filter(!(is.na(val_period)))|>
+  group_by(Depth_m,Datetime, val_period)|>
+  summarize(pred = mean(.pred, na.rm = TRUE),
+            DO_mg.L = mean(DO_mg.L, na.rm = TRUE))|> 
+  group_by(Depth_m, val_period)|>
+  rmse(truth = DO_mg.L, estimate = pred)|>
+  mutate(model_type = "Ensemble")
+
+#calculate min max for each val/depth and join to ensemble_rmse1
+  ensemble_rmse <- all_preds|>
+    filter(!(is.na(val_period)))|>
+    group_by(Depth_m, val_period)|>
+    summarize(min_do = min(DO_mg.L, na.rm= TRUE),
+              max_do = max(DO_mg.L, na.rm= TRUE))|>
+    left_join(ensemble_rmse1, by = c("Depth_m", "val_period"))|>
+    mutate(n_rmse = .estimate/(max_do-min_do))
+
+
+```
+
+#Assemble final RMSE values for plotting
+```{r collate errors}
+rmse_df <- bind_rows(lm_rmse,lasso_rmse,randfor_rmse,lstm_rmse, wet_rmse,ensemble_rmse)|>
+  mutate(model_type = fct_relevel(model_type, "Regression","Lasso","Random Forest", "LSTM","WET","Ensemble"))
+
+#collapse a little more
+rmse_summary <- rmse_df|>
+  group_by(val_period, Depth_m, model_type)|>
+  summarize(mean_rmse = mean(.estimate))
+
+
+rmse_among_model <- rmse_df|>
+  filter(model_type != "Ensemble")|>
+  #filter(Depth_m %in% c(0,1,2,3,4,5,6,7,8,9,10))|>
+  group_by(val_period, Depth_m)|>
+  summarize(mean_rmse = mean(.estimate), among_mod_var = sd(.estimate)/mean_rmse)
+
+
+rmse_among_model|>
+  ggplot(aes(x = as.numeric(as.character(Depth_m)), y = among_mod_var, color = val_period))+
+  geom_point()+
+  geom_smooth(se = FALSE)+
+  facet_wrap(.~val_period)
+
+rmse_among_model|>
+  ggplot(aes(y= among_mod_var, x = as.numeric(as.character(Depth_m))))+
+  geom_point()
+
+rmse_among_model|>
+  ggplot(aes(y= among_mod_var, x = mean_rmse))+
+  geom_point()
+
+var_across_profile <- rmse_summary |>
+  filter(model_type != "Ensemble")|>
+  group_by(model_type, val_period)|>
+  summarize(var = var(mean_rmse))
+  
+var_across_mods <- rmse_summary |>
+  filter(model_type != "Ensemble")|>
+  group_by(Depth_m, val_period)|>
+  summarize(var = var(mean_rmse))
+
+ggplot(var_across_profile, aes(x = model_type, y = var))+geom_point()+
+  facet_wrap(.~val_period)
+
+ggplot(var_across_mods, aes(x = Depth_m, y = var))+geom_point()+
+  facet_wrap(.~val_period)+
+  ggtitle("Model disagreement, I guess, but may need to compare variance in predictions")
+
+
+  
+```
+
+
+
+
+```{r calculate schmidt stability}
+
+
+#read and edit bathymetry
+bathy <- read_csv(here("RC_hypsograph_for_WET.csv"), col_names = FALSE)|>
+  rename(elev_m = "X1", SA_m2 = "X2")|>
+  mutate(Depth_m = -(elev_m-25.2))|>
+  filter(Depth_m <= 10)
+
+schmidt_df <- RC_all|>
+  select(WaterTemp_C, Depth_m, profileId,Datetime, val_period, validation)|>
+  group_by(Depth_m,profileId, Datetime, val_period, validation)|>
+  summarize(across(everything(), mean))|>
+  group_by(profileId, Datetime, val_period, validation)|>
+  summarize(schm.stab = schmidt.stability(wtr = WaterTemp_C, depths = Depth_m, bthA = bathy$SA_m2, bthD = bathy$Depth_m),
+            thermocline_m = thermo.depth(wtr = WaterTemp_C, depths = Depth_m))
+
+schm_sums_df <- schmidt_df|> 
+   filter(!is.na(val_period))|>
+  group_by(val_period)|>
+  summarize(mixing_action = sum(schm.stab),schm.stab_mean = mean(schm.stab, na.rm = TRUE), schm.stab_sd = sd(schm.stab),schm.stab_cv = sd(schm.stab)/schm.stab_mean, schm.stab_var = var(schm.stab)) #mixing action adapted from Oleksy and richardson 2021
+
+ggplot(data = schmidt_df, aes(x = Datetime, y = schm.stab))+geom_point() #raw variance gets at the measure we're wanting to test here: more variable stability indicates Polymixis
+ggplot(data = schm_sums_df, aes(x = val_period, y = schm.stab_var))+geom_point()
+```
+
+
+
+```{r calculate permutation entropy}
+
+ser_lengths <- RC_validation|>
+  group_by(Depth_m, val_period)|>
+  summarize(n = length(DO_mg.L))
+#check continuity in period 4 
+ser4 <- RC_validation|>filter(val_period == 4) 
+## code from Pennekamp et al 2019
+
+clean_pe <- RC_validation|>
+  select(Depth_m, Datetime, val_period, DO_mg.L)|>
+  filter(!is.na(val_period))|>
+  mutate(Date = as_date(Datetime))|>
+  group_by(Date, Depth_m, val_period)|>
+  filter(length(DO_mg.L)==12)
+
+
+clean_pe2<-clean_pe|>ungroup()|>
+  select(DO_mg.L, Depth_m, val_period)|>
+  filter(val_period != 10 & val_period != 4)
+
+pe_opt <- expand_grid(tau = seq(1:12), word = 4, 
+                      Depth_m = seq(from = 0, to = 10, by = 0.5),
+                      val_period = c(1,2,3,5,6,7,8,9,11,12,13))|>
+  left_join(clean_pe2, by = c("Depth_m", "val_period"))
+
+grid_summary <- pe_opt|>
+  group_by(val_period, Depth_m, tau,word)|>
+  summarize(DO_per_entropy = PE(DO_mg.L, weighted = TRUE, tau = mean(tau), word_length = mean(word), tie_method= "first"))|>
+  filter(!is.na(DO_per_entropy))|>
+  group_by(val_period, Depth_m)|>
+  filter(DO_per_entropy == min(DO_per_entropy))|>
+  slice_head(n = 1) #gets rid of ties
+
+#Riedl suggests max embedding dimension should be N > 5n! (where n is embedding dim, N is number of time points) - here the time series can't be longer than 120 time points, meaning max n = 4 - then find tau that minimizes PE - this summarize searches through those values
+
+schm_pe <- grid_summary|>
+  left_join(schm_sums_df, by = c("val_period"))|>
+  left_join(ensemble_rmse|>
+              mutate(val_period = as.numeric(as.character(val_period)),
+                     Depth_m = as.numeric(as.character(Depth_m))), 
+            by = c("val_period", "Depth_m"))
+
+
+
+
+
+summary(lm(data = schm_pe, n_rmse ~ DO_per_entropy+schm.stab_sd))
+summary(lm(data = schm_pe, DO_per_entropy ~ schm.stab_sd*Depth_m))
+#this says that permutation entropy is a significant predictor of model error, but more importantly, as the variability in stability increases, model error increases, so basically these are higher than expected based on the complexity
+```
+
+```{r}
+ggplot(data = blah|>filter(Depth_m == round(as.numeric(as.character(Depth_m)))), aes(x = val_period, y = DO_per_entropy, color = Depth_m))+
+  geom_point()+
+  facet_wrap(.~Depth_m)
+
+blah <- grid_summary2|>mutate(Depth_m = as_factor(Depth_m),val_period = as_factor(val_period))|>
+  #right_join(schm_sums_df,by = "val_period")|>
+  left_join(rmse_df, by = c("val_period", "Depth_m"))
+
+blah|>filter(Depth_m == round(as.numeric(as.character(Depth_m)))+0.5)|>
+  ggplot(aes(y = .estimate, x = DO_per_entropy, color = model_type))+geom_point()+geom_smooth(method = "lm")+
+  facet_wrap(.~val_period, scales = "free")+
+  geom_smooth(method="lm", se = FALSE)
+
+blah|>filter(Depth_m == round(as.numeric(as.character(Depth_m))))|>filter(model_type == "LSTM")|>
+  ggplot(aes(y = .estimate, x = DO_per_entropy, color = model_type))+geom_point()+
+  facet_wrap(.~Depth_m, scales = "free")+
+  geom_smooth(method="lm", se = FALSE)
+
+blah|>filter(as.numeric(as.character(Depth_m)) < 3)|>
+  ggplot(aes(y = .estimate, x = DO_per_entropy, color = model_type))+geom_point()+
+  facet_wrap(.~model_type, scales = "free")+
+  geom_smooth(method="lm", se = FALSE)
+
+
+#ggplot(perment_df, aes(x = Depth_m, y = DO_per_entropy, group = Depth_m)) + geom_boxplot()
+
+#ggsave(plot=blah, "C:/Users/Caleb_Robbins/Desktop/t1w6-1.jpeg",height = 8, width = 12, units = "in")
+```
+Need data frame with ensemble rmse, schm stab, depth, and PE for each period
+
+```{r}
+all_preds|>
+  filter(model != "Ensemble")|>
+  filter(!is.na(val_period))|>
+  filter(Depth_m ==10)|>
+  filter(DO_mg.L <2)|>
+  ggplot(aes(y = DO_mg.L, x = .pred, color = model))+
+  geom_point()+
+  geom_abline(slope = 1)+
+  geom_smooth(method = "lm")+
+  facet_wrap(.~model)
+
+```
+
+# Plots
+
+```{r plot themes}
+mytheme_fig2 <- theme_classic()+
+    theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 12,face = "bold"),
+          axis.text.y = element_text(size = 12, face = "bold"),
+          axis.title.y = element_text(size = 15, face = "bold"),
+          axis.title.x = element_blank(),
+          legend.text = element_text(size = 15, face = "bold"),
+          legend.title = element_blank(),
+          legend.position = c(0.15,0.125),
+          panel.grid.major = element_blank(), panel.grid.minor = element_blank(),panel.background = element_blank())  
+  
+mytheme_fig3 <- theme_classic()+
+    theme(axis.text.x = element_text(size = 16, face = "bold"),
+          axis.text.y = element_text(size = 14, face = "bold"),
+          axis.title.y = element_text(size = 20, face = "bold"),
+          legend.text = element_text(size = 12, face = "bold"),
+          legend.title = element_text(size = 14, face = "bold"),
+          panel.grid.major = element_blank(), panel.grid.minor = element_blank(),panel.background = element_blank())
+
+```
+
+```{r Fig 2 Schmidt stability through year}
+
+schmidt.p0 <- ggplot() +
+  geom_point(data=schmidt_df, aes(x=Datetime, y=schm.stab, color=validation), size=1.5, alpha = 0.6) +
+  scale_color_jco()+
+  scale_y_continuous(breaks = c(-125, 0, 125, 250, 375,500), limits = c(-130,525))+
+  scale_x_datetime(date_breaks = "1 month", date_labels = "%b-%Y")+
+  ylab(bquote("Schmidt Stability " (J/m^2)))+
+  geom_hline(yintercept = 0)+
+  guides(colour = guide_legend(override.aes = list(size=4)))+
+  mytheme_fig2+
+  theme(legend.position = c(0.85,0.85))
+schmidt.p0
+
+ggsave(plot = schmidt.p0,here("Predictive_Models/figures/Fig2_Schmidt_TimeSeries.jpeg"), height = 6, width = 6, units = "in")
+```
+
+```{r Fig 3 DO Time Series}
+
+do_mg.p0 <- ggplot() +
+  geom_point(data=RC_all|>filter(Depth_m == 0), aes(x=Datetime, y=DO_mg.L, color=validation), size=1.5, alpha = 0.6) +
+  scale_color_jco()+
+  scale_y_continuous(breaks = c(0,5,10,15), limits = c(0,16.75))+
+  scale_x_datetime(date_breaks = "1 month", date_labels = "%b-%Y")+
+  ylab("DO (mg/L)")+
+  guides(colour = guide_legend(override.aes = list(size=4)))+
+  mytheme_fig2+
+  theme(axis.text.x = element_blank())
+
+
+do_mg.p5 <- ggplot() +
+  geom_point(data=RC_all|>filter(Depth_m == 5), aes(x=Datetime, y=DO_mg.L, color=validation), size=1.5, alpha = 0.6) +
+  scale_color_jco()+
+  scale_y_continuous(breaks = c(0,5,10,15), limits = c(0,15))+
+  scale_x_datetime(date_breaks = "1 month", date_labels = "%b-%Y")+
+  ylab("DO (mg/L)")+
+  mytheme_fig2+
+  guides(color = FALSE)+
+  theme(axis.text.x = element_blank())
+
+do_mg.p10 <- ggplot() +
+  geom_point(data=RC_all|>filter(Depth_m == 10), aes(x=Datetime, y=DO_mg.L, color=validation), size=1.5, alpha = 0.6) +
+  scale_color_jco()+
+  scale_y_continuous(breaks = c(0,5,10,15), limits = c(0,15))+
+  scale_x_datetime(date_breaks = "1 month", date_labels = "%b-%Y")+
+  ylab("DO (mg/L)")+
+  mytheme_fig2+
+  guides(color = FALSE)
+
+do_mg.cow <- plot_grid(do_mg.p0,do_mg.p5,do_mg.p10, nrow = 3,
+                       labels = c(" 0 m", " 5 m", "10 m"), 
+                       label_x = 0.8, label_y = c(0.15,0.15,0.315), label_size = 18)
+
+
+
+ggsave(plot = do_mg.cow,here("Predictive_Models/figures/Fig3_DO_TimeSeries.jpeg"), height = 12, width = 6, units = "in")
+```
+
+```{r Fig Sx DO difference}
+
+do_diff_df <- RC_all |>
+  group_by(profileId, validation)|>
+  summarize(Datetime = mean(Datetime), 
+            DO_diff10 = first(DO_mg.L) - last(DO_mg.L), 
+            DO_diff7 = first(DO_mg.L) - nth(DO_mg.L, 17), 
+            DO_diff5 = first(DO_mg.L) - nth(DO_mg.L,12))
+  
+
+
+do_diff5.p<- ggplot(do_diff_df) +
+  geom_point(aes(x=Datetime, y=DO_diff5, color=validation), size=1.5, alpha = 0.6) +
+  scale_color_jco()+
+  scale_y_continuous(breaks = c(0,5,10,15), limits = c(0,15))+
+  scale_x_datetime(date_breaks = "1 month", date_labels = "%b-%Y")+
+  ylab("DO Difference")+
+  mytheme_fig2+
+  guides(color = FALSE)+
+  theme(axis.text.x = element_blank())
+
+
+do_diff7.p<- ggplot(do_diff_df) +
+  geom_point(aes(x=Datetime, y=DO_diff7, color=validation), size=1.5, alpha = 0.6) +
+  scale_color_jco()+
+  scale_y_continuous(breaks = c(0,5,10,15), limits = c(0,15))+
+  scale_x_datetime(date_breaks = "1 month", date_labels = "%b-%Y")+
+  ylab("DO Difference")+
+  mytheme_fig2+
+  guides(color = FALSE)+
+  theme(axis.text.x = element_blank())
+
+do_diff10.p<- ggplot(do_diff_df) +
+  geom_point(aes(x=Datetime, y=DO_diff10, color=validation), size=1.5, alpha = 0.6) +
+  scale_color_jco()+
+  scale_y_continuous(breaks = c(0,5,10,15), limits = c(0,15))+
+  scale_x_datetime(date_breaks = "1 month", date_labels = "%b-%Y")+
+  ylab("DO Difference")+
+  mytheme_fig2+
+  guides(color = FALSE)
+
+
+
+do_diff.cow <- plot_grid(do_diff5.p,do_diff7.p,do_diff10.p, nrow = 3,
+                       labels = c("5 m", " 7 m", "10 m"), 
+                       label_x = 0.8, label_y = c(0.9,0.9,0.9), label_size = 18)
+
+do_diff.cow
+
+ggsave(plot = do_diff.cow,here("Predictive_Models/figures/FigSx_DOdiff_TimeSeries.jpeg"), height = 12, width = 6, units = "in")
+
+```
+
+```{r Fig Sx thermocline}
+
+thermo.p0 <- ggplot() +
+  geom_point(data=schmidt_df, aes(x=Datetime, y=thermocline_m, color=validation), size=1.5, alpha = 0.6) +
+  scale_color_jco()+
+  scale_x_datetime(date_breaks = "1 month", date_labels = "%b-%Y")+
+  ylab("Thermocline Depth (m)")+
+  guides(colour = guide_legend(override.aes = list(size=4)))+
+  mytheme_fig2+
+  theme(legend.position = c(0.45,0.15))
+thermo.p0
+
+ggsave(plot = thermo.p0,here("Predictive_Models/figures/FigSx_Thermocline_TimeSeries.jpeg"), height = 6, width = 6, units = "in")
+
+```
+
+
+```{r Fig Sx Water Temp through year}
+
+temp.p0 <- ggplot() +
+  geom_point(data=RC_all|>filter(Depth_m == 0), aes(x=Datetime, y=WaterTemp_C, color=validation), size=1.5, alpha = 0.6) +
+  scale_color_jco()+
+ scale_y_continuous(breaks = c(15,20,25,30,35), limits = c(15,36))+
+  scale_x_datetime(date_breaks = "1 month", date_labels = "%b-%Y")+
+  ylab("Temperature (C)")+
+  guides(colour = guide_legend(override.aes = list(size=4)))+
+  mytheme_fig2+
+  theme(axis.text.x = element_blank(),legend.position = c(0.85,0.85))
+temp.p0
+
+temp.p5 <- ggplot() +
+  geom_point(data=RC_all|>filter(Depth_m == 5), aes(x=Datetime, y=WaterTemp_C, color=validation), size=1.5, alpha = 0.6) +
+  scale_color_jco()+
+ scale_y_continuous(breaks = c(15,20,25,30,35), limits = c(15,36))+
+  scale_x_datetime(date_breaks = "1 month", date_labels = "%b-%Y")+
+  ylab("Temperature (C)")+
+  guides(colour = guide_legend(override.aes = list(size=4)))+
+  mytheme_fig2+
+  theme(axis.text.x = element_blank(),legend.position = c(0.85,0.85))
+temp.p5
+
+temp.p10 <- ggplot() +
+  geom_point(data=RC_all|>filter(Depth_m == 10), aes(x=Datetime, y=WaterTemp_C, color=validation), size=1.5, alpha = 0.6) +
+  scale_color_jco()+
+  scale_y_continuous(breaks = c(15,20,25,30,35), limits = c(15,36))+
+  scale_x_datetime(date_breaks = "1 month", date_labels = "%b-%Y")+
+  ylab("Temperature (C)")+
+  guides(colour = guide_legend(override.aes = list(size=4)))+
+  mytheme_fig2+
+  theme(legend.position = c(0.85,0.85))
+temp.p10
+
+temp.cow <- plot_grid(temp.p0,temp.p5,temp.p10, nrow = 3,
+                       labels = c(" 0 m", " 5 m", "10 m"), 
+                       label_x = 0.4, label_y = c(0.15,0.15,0.315), label_size = 18)
+
+
+ggsave(plot = temp.cow,here("Predictive_Models/figures/FigSx_Temp_TimeSeries.jpeg"), height = 12, width = 6, units = "in")
+```
+
+```{r Fig Sx Wind through year}
+
+airtemp.p0 <- ggplot() +
+  geom_point(data=RC_all|>filter(Depth_m == 0), aes(x=Datetime, y=AirTemp_C, color=validation), size=1.5, alpha = 0.6) +
+  scale_color_jco()+
+ #scale_y_continuous(breaks = c(15,20,25,30,35), limits = c(15,36))+
+  scale_x_datetime(date_breaks = "1 month", date_labels = "%b-%Y")+
+  ylab("Air Temperature (C)")+
+  guides(colour = guide_legend(override.aes = list(size=4)))+
+  mytheme_fig2+
+  theme(axis.text.x = element_blank(),legend.position = c(0.4,0.15))
+airtemp.p0
+
+wind.p0 <- ggplot() +
+  geom_point(data=RC_all|>filter(Depth_m == 0)|>
+  mutate(wind_speed = sqrt(WWind_m.s^2+SWind_m.s^2)), aes(x=Datetime, y=wind_speed, color=validation), size=1.5, alpha = 0.6) +
+  scale_color_jco()+
+ #scale_y_continuous(breaks = c(15,20,25,30,35), limits = c(15,36))+
+  scale_x_datetime(date_breaks = "1 month", date_labels = "%b-%Y")+
+  ylab("Wind Speed (m/s)")+
+  guides(colour = FALSE)+
+  mytheme_fig2
+wind.p0
+
+
+wind_air.cow <- plot_grid(airtemp.p0,wind.p0, nrow = 2)
+
+
+ggsave(plot = wind_air.cow,here("Predictive_Models/figures/FigSx_WindTemp_TimeSeries.jpeg"), height = 9, width = 6, units = "in")
+```
+
+
+
+```{r Fig Sx Model average RMSE}
+library(ggdist)
+rmse_overall.p <- rmse_summary|>
+  filter(model_type != "Ensemble")|>
+  ggplot(aes(x= mean_rmse, y = model_type, fill = model_type))+
+  scale_fill_jco(guide = FALSE)+
+  stat_halfeye()+
+  xlab("RMSE")+
+  mytheme_fig3+
+  theme(axis.title.y = element_blank(), legend.title = element_blank(), axis.title.x = element_text(size = 20, face = "bold"))
+rmse_overall.p
+
+rmse_overall_all.p <- rmse_summary|>
+  filter(model_type != "Ensemble")|>
+  ggplot(aes(x= mean_rmse))+
+  scale_fill_jco(guide = FALSE)+
+  stat_halfeye()+
+  xlab("RMSE")+
+  mytheme_fig3+
+  theme(axis.title.y = element_blank(), legend.title = element_blank(), axis.title.x = element_text(size = 20, face = "bold"))
+rmse_overall_all.p
+
+rmse_overall_sums <- rmse_summary|>
+  filter(model_type!= "Ensemble")|>
+  ungroup()|>
+  summarize(median = median(mean_rmse), lwr = quantile(mean_rmse, 0.025), upr = quantile(mean_rmse, 0.975))
+
+ggsave(plot = rmse_overall.p, file = here("Predictive_Models/figures/FigSx_Overall_RMSE.jpeg"), height = 6, width = 6, units = "in")
+```
+
+
+```{r Fig 4 RMSE by validation period}   
+
+  rmse_period.p <- rmse_summary|>
+  filter(model_type != "Ensemble")|>
+  mutate(model_type = fct_drop(model_type,"Ensemble"))|>
+  ggplot()+
+  geom_boxplot(aes(x = model_type, y = mean_rmse, fill = val_period), outlier.shape = 21, color = "black")+
+    ylab("RMSE")+
+    labs(fill = "Period")+
+    mytheme_fig3 +
+    theme(axis.title.x = element_blank(), legend.key.height = unit(0.4, "in"))
+rmse_period.p  
+
+  rmse_period.p2 <- rmse_summary|>
+    filter(Depth_m == 0.5+round(as.numeric(as.character(Depth_m))))|>
+  ggplot()+
+  geom_boxplot(aes(x = model_type, y = mean_rmse, fill = model_type), outlier.shape = 21, color = "black", alpha = 0.5)+
+    geom_jitter(aes(x = model_type, y = mean_rmse, color = model_type), alpha = 0.5)+
+    scale_fill_jco()+
+    scale_color_jco()+
+    ylab("RMSE")+
+    labs(fill = "Model Type", color = "Model Type")+
+    facet_wrap(.~val_period)+
+    mytheme_fig3 +
+    theme(axis.title.x = element_blank(), legend.key.height = unit(0.4, "in"))
+rmse_period.p2 
+
+  
+ggsave(plot = rmse_period.p,here("Predictive_Models/figures/Fig4_rmse_period.jpeg"), height = 6, width = 12, units = "in")
+```
+
+
+```{r Fig 5 RMSE depth}
+
+mytheme_fig4 <- theme_bw()+
+    theme(axis.text.x = element_text(size = 14, face = "bold"),
+          axis.text.y = element_text(size = 14, face = "bold"),
+          axis.title.y = element_text(size = 20, face = "bold"),
+          axis.title.x = element_text(size = 20, face = "bold"),
+          legend.text = element_text(size = 16, face = "bold"),legend.title = element_blank(),
+          legend.position = c(0.75,0.095), legend.key.height = unit(0.25, "in"), legend.key.width = unit(0.4, "in"),
+          panel.background = element_blank())
+
+rmse_depth.p<-rmse_summary|>
+  filter(model_type != "Ensemble")|>
+  mutate(model_type = fct_drop(model_type,"Ensemble"))|>
+  ggplot(aes(x = as.numeric(as.character(Depth_m)), y = mean_rmse, color = model_type))+
+  geom_point()+
+  scale_color_jco()+
+  geom_smooth(se = FALSE)+
+  facet_wrap(.~val_period)+
+  scale_x_continuous(breaks = c(0,2,4,6,8,10))+
+  ylab("RMSE")+xlab("Depth (m)")+
+  mytheme_fig4+
+  guides(color=guide_legend(nrow=2))
+rmse_depth.p
+
+rmse_depth.p2<-rmse_summary|>
+  ggplot()+
+  geom_point(aes(x = as.numeric(as.character(Depth_m)), y = mean_rmse, color = model_type))+
+  geom_boxplot(outlier.shape = 2,aes(x = as.numeric(as.character(Depth_m)), y = mean_rmse, group = Depth_m))+
+  scale_color_jco()+
+  facet_wrap(.~val_period)+
+  scale_x_continuous(breaks = c(0,2,4,6,8,10))+
+  ylab("RMSE")+xlab("Depth (m)")+
+  mytheme_fig4+
+  guides(color=guide_legend(nrow=2))
+rmse_depth.p2
+
+ggsave(plot = rmse_depth.p,here("Predictive_Models/figures/Fig5_rmse_depth.jpeg"), height = 6, width = 12, units = "in")
+```
+
+```{r Fig 6 RMSE by Polymixis}
+rmse_sum2 <- rmse_summary|>
+  group_by(val_period, model_type)|>
+  mutate(mean_rmse = round(mean_rmse, 4), #weird rounding thing that messes up the filtering step below
+         worst_score = max(mean_rmse, na.rm = TRUE),
+         best_score = min(mean_rmse, na.rm = TRUE))|>
+  ungroup()|>
+  group_by(val_period,model_type)|>
+  filter(worst_score == mean_rmse)
+
+schm_rmse_df <- schm_sums_df|>
+  mutate(val_period = as_factor(val_period))|>
+  right_join(rmse_summary, by = "val_period")|>
+  filter(model_type != "Ensemble")|>
+  filter(Depth_m %in% c(0.5,1.5,2.5,3.5,4.5,5.5,6.5,7.5,8.5,9.5))
+
+schm_rmse_df2 <- schm_sums_df|>
+  mutate(val_period = as_factor(val_period))|>
+  right_join(rmse_sum2, by = "val_period")|>
+  mutate(depth_of_worst = as.numeric(as.character(Depth_m)))
+
+ggplot(data = schm_rmse_df2, aes(x = schm.stab_sd, y = depth_of_worst, color = model_type))+
+  geom_point()+
+  facet_wrap(.~model_type)
+  NULL
+
+
+ggplot(data = schm_rmse_df2, aes(x = schm.stab_sd, y = worst_score, fill = depth_of_worst))+
+  geom_point(shape = 21, size = 2)+
+  scale_fill_gradient2(low = "light gray", mid = "black", high = "light gray", midpoint = 5)+
+  geom_smooth(method = "lm")+
+  facet_wrap(.~model_type)+
+  theme_bw()
+
+
+stab_rmse.p <- schm_rmse_df|>
+  mutate(Depth_m = str_c(Depth_m, " m"))|>
+  ggplot(aes(x = schm.stab_sd, y = mean_rmse, color = model_type))+
+  geom_point(shape = 21, size = 2)+
+  geom_smooth(method = "lm")+
+  scale_color_jco()+
+  #scale_x_continuous(breaks = c(2,3,4,5), limits = c(2,5), trans = "log")+
+  scale_x_continuous(trans = "log", breaks = c(10,20,50,150), limits = c(8,150))+
+  xlab(expression(bold(paste("Polymixis (Schmidt Stability ", sigma^{2}, ")"))))+
+  ylab("RMSE")+
+  facet_wrap(.~Depth_m)+
+  theme_bw()+
+  guides(color=guide_legend(nrow=2))+
+  theme(axis.text.y = element_text(size = 12, face = "bold"), axis.text.x = element_text(size = 12, face = "bold"), 
+        axis.title.y = element_text(size = 15, face = "bold"), axis.title.x = element_text(size = 15, face = "bold"), 
+        legend.position = c(0.75,0.15), legend.key.height = unit(0.25, "in"), legend.key.width = unit(0.4, "in"),
+        legend.title = element_blank(), legend.text = element_text(size = 15))
+stab_rmse.p
+
+ggsave(plot = stab_rmse.p,here("Predictive_Models/figures/Fig6_stab_rmse.jpeg"), height = 6, width = 12, units = "in")
+```
+
+
+```{r Fig Supp X Modeled and observed}
+preds_for_plot <- all_preds|> filter(!is.na(val_period))|>
+  filter(Depth_m == 0|Depth_m == 5|Depth_m == 10)|>
+  filter(val_period == 1|val_period == 4|val_period == 7|val_period == 10|val_period == 13)|>
+  filter(model != "Ensemble")|>
+  mutate(Depth_m = str_c(Depth_m, " m"),
+         val_period = str_c("Period ", val_period),
+         val_period = fct_relevel(val_period, "Period 1","Period 4","Period 6","Period 10","Period 13"),
+         model = fct_recode(model, "Lasso" = "lasso", "Regression" = "lm", "Random Forest" = "randfor", "LSTM" = "lstm", "WET" = "wet"))
+
+
+pred_obs.p<-ggplot(data=preds_for_plot)+
+    geom_point(aes(x = Datetime, y = .pred, color = model), alpha = 0.5)+
+    geom_line(aes(x = Datetime, y = DO_mg.L), size = 1)+
+    facet_grid(Depth_m~val_period, scales = "free")+
+    scale_color_jco()+
+  ylab("DO (mg/L)")+
+    theme_bw()+
+      theme(axis.title.x = element_text(size = 16),axis.title.y = element_text(size = 16), 
+            axis.text.x= element_text(size = 12), axis.text.y = element_text(size = 12),
+            legend.text = element_text(size = 12), legend.title = element_blank())
+
+pred_obs.p
+  ggsave(plot = pred_obs.p,here("Predictive_Models/figures/pred_obs.p.jpeg"), height = 12, width = 16, units = "in")
+```
+
+```{r Fig Sxxx Permutation entropy}
+
+schm_pe2<-schm_pe|>filter(Depth_m == round(as.numeric(as.character(Depth_m))))|> 
+  mutate(Depth_m = as_factor(Depth_m),
+         Depth_m = fct_relabel(Depth_m, ~str_c(.," m")))
+
+pe_schm.p<-ggplot(schm_pe2, aes(y = DO_per_entropy, x = schm.stab_sd))+
+  geom_point()+
+  geom_smooth(method = "lm")+
+  ylab("Permutation Entropy")+
+  xlab(expression(bold(paste("Polymixis (Schmidt Stability ", sigma^{2}, ")"))))+
+  facet_wrap(.~Depth_m, scales = "free")+
+  theme_bw()+
+  theme(axis.title.x = element_text(size = 15, face = "bold"),axis.title.y = element_text(size = 15, face = "bold"))
+pe_schm.p
+
+
+
+pe_rmse.p<-ggplot(schm_pe|>filter(Depth_m == round(as.numeric(as.character(Depth_m)))), 
+       aes(y = n_rmse, x = DO_per_entropy, color = schm.stab_sd))+
+  geom_point(size = 2)+
+  scale_color_continuous(guides(color = "Polymixis (Schmidt Stability S.D.)"))+
+  xlab("Permutation Entropy")+
+  ylab("Normalized RMSE")+
+  geom_smooth(method = "lm")+
+  mytheme_fig3+
+  theme(legend.position = "bottom", axis.title.x = element_text(size = 15, face = "bold"))
+pe_rmse.p
+
+ ggsave(plot = pe_schm.p,here("Predictive_Models/figures/FigSx_pe_schm.p.jpeg"), height = 8, width = 12, units = "in")
+  ggsave(plot = pe_rmse.p,here("Predictive_Models/figures/FigSx_pe_rmse.p.jpeg"), height = 8, width = 12, units = "in")
+
+```
+
+
+################################### Old Code ###########################
+```{r do time series test plots}
+
+testing_pal <- colorRampPalette(c("#56B1F7","#132B43"))(21)
+training_pal <- colorRampPalette(brewer_pal(palette = "YlGn")(5))(21)
+palette_df <- tibble(color_sel = c(testing_pal, training_pal), 
+                     validation = c(rep("Testing",21),rep("Training",21)), 
+                     Depth_m = rep(seq(0,10,by = 0.5),2))
+
+
+
+
+do_mg.p <- ggplot() +
+  geom_point(data=RC_all|>filter(validation == "Training"), aes(x=Datetime, y=DO_mg.L, color=Depth_m), shape=1, size=1, alpha = 0.4) +
+  scale_color_gradient(name = "Training",low = "#56B1F7", high = "#132B43") +
+  geom_point(data= RC_all|>filter(validation == "Testing"), aes(x=Datetime, y=DO_mg.L, shape=shp, fill=Depth_m), shape=22, size=1, alpha = 0.4) +
+  #scale_fill_gradient(name = "Testing", low="#FFFFCC", high="#006837")+
+  scale_fill_gradient(name = "Testing", low="gray100", high="light green")+
+  #scale_x_datetime(date_breaks = "1 day")+
+  ylab("DO (mg/L)")+
+  theme_classic()+
+  theme(axis.title.x = element_blank(),axis.title.y = element_text(size = 15,face = "bold"),axis.text.x = element_text(angle = 45, hjust = 1, size = 15,face = "bold"))
+do_mg.p
+
+
+do_mg.p2 <- ggplot() +
+  geom_point(data=RC_all|>filter(validation == "Training")|>filter(Depth_m == 0|Depth_m == 5|Depth_m == 10), aes(x=Datetime, y=DO_mg.L, color=Depth_m), shape=1, size=1, alpha = 0.4) +
+  scale_color_gradient(name = "Training",low = "#56B1F7", high = "#132B43") +
+  geom_point(data= RC_all|>filter(validation == "Testing")|>filter(Depth_m == 0|Depth_m == 5|Depth_m == 10), aes(x=Datetime, y=DO_mg.L, shape=shp, fill=Depth_m), shape=22, size=1, alpha = 0.4) +
+  #scale_fill_gradient(name = "Testing", low="#FFFFCC", high="#006837")+
+  scale_fill_gradient(name = "Testing", low="gray100", high="light green")+
+  #scale_x_datetime(date_breaks = "1 day")+
+  ylab("DO (mg/L)")+
+  theme_classic()+
+  theme(axis.title.x = element_blank(),axis.title.y = element_text(size = 15,face = "bold"),axis.text.x = element_text(angle = 45, hjust = 1, size = 15,face = "bold"))
+do_mg.p2
+
+do_mg.p3 <- ggplot() +
+  geom_point(data=RC_all|>filter(validation == "Training")|>filter(Depth_m == 10), aes(x=Datetime, y=DO_mg.L, color=Depth_m), shape=1, size=1, alpha = 0.4) +
+  scale_color_gradient(name = "Training",low = "#56B1F7", high = "#132B43") +
+  geom_point(data= RC_all|>filter(validation == "Testing")|>filter(Depth_m == 10), aes(x=Datetime, y=DO_mg.L, shape=shp, fill=Depth_m), shape=22, size=1, alpha = 0.4) +
+  #scale_fill_gradient(name = "Testing", low="#FFFFCC", high="#006837")+
+  scale_fill_gradient(name = "Testing", low="gray100", high="light green")+
+  #scale_x_datetime(date_breaks = "1 day")+
+  ylab("DO (mg/L)")+
+  theme_classic()+
+  theme(axis.title.x = element_blank(),axis.title.y = element_text(size = 15,face = "bold"),axis.text.x = element_text(angle = 45, hjust = 1, size = 15,face = "bold"))
+do_mg.p3
+
+
+
+# Tried faceting but would rather cowplot
+do_mg.f <- ggplot() +
+  geom_point(data=RC_all|>filter(Depth_m == 0|Depth_m == 5|Depth_m == 10), aes(x=Datetime, y=DO_mg.L, color=validation), size=3, alpha = 0.6) +
+  scale_color_nejm()+
+  #scale_color_manual(values = c("#00AFBB", "#E7B800"))+
+  scale_x_datetime(date_breaks = "1 month", date_labels = "%b-%Y")+
+  ylab("DO (mg/L)")+
+  facet_grid(Depth_m~., scales = "free")+
+  mytheme+
+  theme(axis.title.x = element_blank(),axis.title.y = element_text(size = 15,face = "bold"),axis.text.x = element_text(angle = 45, hjust = 1, size = 15,face = "bold"))
+do_mg.f
+```

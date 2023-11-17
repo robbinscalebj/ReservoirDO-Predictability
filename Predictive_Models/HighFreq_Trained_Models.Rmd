@@ -1,0 +1,384 @@
+---
+title: "HighFreq_Trained_Models"
+output: html_document
+date: "2022-10-13"
+---
+
+
+```{r setup}
+library(tidymodels)
+library(here)
+library(lubridate)
+library(tidyverse)
+library(doParallel)
+
+
+
+#Data were created in Collate_ShortTermANDValidation_Data.R - read XXX.csv
+#RC_train <- read_csv("RC_pred_highfreq_training.csv")|>
+ # drop_na(Depth_m,Cloud_cov_fraction,DewPoint_C,AirTemp_C,Pressure_hPa, WWind_m.s,SWind_m.s)
+  #mutate(hour_of_day = as.numeric(hour(time_of_day)), .keep = "unused")|>
+ # select(-profileId)
+
+
+load(here("Predictive_Models/Create_Recipes_Environment.Rdata"))
+
+```
+
+
+
+# Simple linear model - high-freq 
+```{r select best lm}
+#set engine - very easy in this case
+lm_spec <- linear_reg() |> 
+  set_engine("lm")
+
+lm_models <- workflow_set(
+  preproc = recipes_list,
+  models = list(glm = lm_spec))
+
+
+cl <- makePSOCKcluster(14)
+registerDoParallel(cl)
+lm_rsmp <- lm_models|>
+  workflow_map("fit_resamples", verbose = TRUE, resamples = vfold_cv(rec_training, v = 10, repeats = 5, strata = Depth_m))
+  
+lm_metrics<-collect_metrics(lm_rsmp)
+
+lm_plot <- lm_metrics|>
+  mutate(.metric = fct_recode(.metric, `R-squared` = "rsq", RMSE = "rmse"))|>
+  ggplot(aes(x = wflow_id, y = mean))+
+  geom_point()+
+  geom_errorbar(aes(ymin = mean-(1.96*std_err), ymax = mean+(1.96*std_err)))+
+  facet_wrap(.~.metric, scales = "free")+
+  xlab("Model ID")+
+  ylab("Metric Score")+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+lm_plot
+
+
+```
+
+
+Want to save the best lm from rmse for later use on validation data
+```{r save best lm}
+best_lm_id<-lm_rsmp |> 
+  rank_results(rank_metric = "rmse")|>
+  slice_head()|>
+  pull(wflow_id)
+best_lm_id
+  
+
+best_lm_fit <- lm_rsmp|>
+  extract_workflow(best_lm_id)|>
+  fit(data = rec_training)
+
+saveRDS(best_lm_fit, "trained_workflows/lm_highfreq_fit.rds")
+
+```
+
+recipe_list <- list("lag0" = rec_lag0,"lag1" = rec_lag1,"lag6" = rec_lag6,"lag12" = rec_lag12,"lag24" = rec_lag24,"lag36" = rec_lag36,"lag48" = rec_lag48,"lag72" = rec_lag72,"lag144" = rec_lag144, 
+                    "lag0_int" = rec_lag0_int,"lag1_int" = rec_lag1_int,"lag6_int" = rec_lag6_int,"lag12_int" = rec_lag12_int,"lag24_int" = rec_lag24_int,"lag36_int" = rec_lag36_int,"lag48_int" = rec_lag48_int,"lag72_int" = rec_lag72_int,"lag144_int" = rec_lag144_int)
+
+# Lasso
+```{r}
+lambda_grid <- grid_regular(penalty(), levels = 50) #column of penalties evenly spread from 1e-10 to 1
+
+tune_spec <- linear_reg(penalty = tune(), mixture = 1)|>
+  set_engine("glmnet")
+
+
+lasso_models <- workflow_set(
+  preproc = recipes_list,
+  models = list(lasso = tune_spec))
+
+cl <- makePSOCKcluster(14)
+registerDoParallel(cl)
+lasso_tune <- lasso_models|>
+  workflow_map(verbose = TRUE, "tune_grid", resamples = vfold_cv(rec_training, v = 10, repeats = 5, strata = Depth_m), grid = lambda_grid)
+
+#saveRDS(lasso_tune, "trained_workflows/lasso_tune_object.rds")
+#lasso_tune <- readRDS("trained_workflows/lasso_tune_object.rds")
+
+  autoplot(lasso_tune, select_best=TRUE, rank_metric = "rmse", metric = "rmse")+
+   geom_text(aes(y = mean - 0.1, label = wflow_id), angle = 45) +
+   lims(y = c(1, 3)) +
+   theme(legend.position = "none")
+  
+
+#this will get the best resulting lasso model from whichever recipe appeared to perform best - autoplot looks like lag0
+lasso_best_results <- lasso_tune|>collect_metrics()|>
+  group_by(.metric,.config)|>arrange(mean, .by_group = TRUE)|>group_by(wflow_id)|>filter(.config == pluck(.config[1]))
+
+lasso_predselect_plot <- lasso_best_results|>
+  mutate(.metric = fct_recode(.metric, `R-squared` = "rsq", RMSE = "rmse"),
+         wflow_id = as_factor(wflow_id),
+         wflow_id = fct_reorder2(wflow_id, desc(.metric), desc(mean)))|>
+  ggplot(aes(x = wflow_id, y = mean))+
+  geom_point()+
+  geom_errorbar(aes(ymin = mean-(1.96*std_err), ymax = mean+(1.96*std_err)))+
+  facet_wrap(.~.metric, scales = "free")+
+  xlab("Model ID")+
+  ylab("Metric Score")+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+lasso_predselect_plot
+
+lasso_best <-lasso_tune |> 
+  extract_workflow_set_result("intlag0_lasso")|>
+  select_best(metric = "rmse")
+
+lasso_final <- lasso_tune|>
+  extract_workflow("intlag0_lasso")|>
+  finalize_workflow(lasso_best)
+
+#tuning parameter plot
+lasso_tune |> 
+  extract_workflow_set_result("intlag0_lasso")|>
+  collect_metrics()|>
+  ggplot(aes(penalty, mean, color = .metric)) +
+  geom_errorbar(aes(
+    ymin = mean - std_err,
+    ymax = mean + std_err
+  ),
+  alpha = 0.5
+  ) +
+  geom_line(size = 1.5) +
+  facet_wrap(~.metric, scales = "free", nrow = 2) +
+  scale_x_log10() +
+  theme(legend.position = "none")
+
+saveRDS(lasso_final, "trained_workflows/lasso_final.rds")
+
+```
+
+
+
+
+
+# Random Forest 
+```{r randfor mods}
+tune_randfor <- rand_forest(
+  mtry = tune(),
+  trees = 500, 
+  min_n = tune()) |>
+  set_mode("regression") %>%
+  set_engine("ranger", importance = "impurity")
+
+
+########################### Workflow Sets
+randfor_lag0_models <- workflow_set(
+  preproc = list(lag0 = rec_lag0),
+  models = list(randfor = tune_randfor))
+
+randfor_lag2_models <- workflow_set(
+  preproc = list(lag2 = rec_lag2),
+  models = list(randfor = tune_randfor))
+
+randfor_lag6_models <- workflow_set(
+  preproc = list(lag6 = rec_lag6),
+  models = list(randfor = tune_randfor))
+
+randfor_lag12_models <- workflow_set(
+  preproc = list(lag12 = rec_lag12),
+  models = list(randfor = tune_randfor))
+
+randfor_lag24_models <- workflow_set(
+  preproc = list(lag24 = rec_lag24),
+  models = list(randfor = tune_randfor))
+
+
+
+randfor_lag48_models <- workflow_set(
+  preproc = list(lag48 = rec_lag48),
+  models = list(randfor = tune_randfor))
+
+randfor_lag72_models <- workflow_set(
+  preproc = list(lag72 = rec_lag72),
+  models = list(randfor = tune_randfor))
+
+
+randfor_intlag0_models <- workflow_set(
+  preproc = list(intlag0 = rec_int_lag0),
+  models = list(randfor = tune_randfor))
+
+randfor_intlag2_models <- workflow_set(
+  preproc = list(intlag2 = rec_int_lag2),
+  models = list(randfor = tune_randfor))
+
+randfor_intlag6_models <- workflow_set(
+  preproc = list(intlag6 = rec_int_lag6),
+  models = list(randfor = tune_randfor))
+
+randfor_intlag12_models <- workflow_set(
+  preproc = list(intlag12 = rec_int_lag12),
+  models = list(randfor = tune_randfor))
+
+randfor_intlag24_models <- workflow_set(
+  preproc = list(intlag24 = rec_int_lag24),
+  models = list(randfor = tune_randfor))
+
+
+randfor_intlag48_models <- workflow_set(
+  preproc = list(intlag48 = rec_int_lag48),
+  models = list(randfor = tune_randfor))
+
+randfor_intlag72_models <- workflow_set(
+  preproc = list(intlag72 = rec_int_lag72),
+  models = list(randfor = tune_randfor))
+
+
+
+### tune models
+cl <- makePSOCKcluster(14)
+doParallel::registerDoParallel(cl)
+randfor_lag0_tuned <- randfor_lag0_models|>
+  workflow_map(verbose = TRUE, "tune_grid", resamples = vfold_cv(lag0_training, v = 10, repeats = 5, strata = Depth_m), grid = 20)
+doParallel::registerDoParallel(cl)
+randfor_lag2_tuned <- randfor_lag2_models|>
+  workflow_map(verbose = TRUE, "tune_grid", resamples = vfold_cv(lag2_training, v = 10, repeats = 5, strata = Depth_m), grid = 20)
+doParallel::registerDoParallel(cl)
+randfor_lag6_tuned <- randfor_lag6_models|>
+  workflow_map(verbose = TRUE, "tune_grid", resamples = vfold_cv(lag6_training, v = 10, repeats = 5, strata = Depth_m), grid = 20)
+doParallel::registerDoParallel(cl)
+randfor_lag12_tuned <- randfor_lag12_models|>
+  workflow_map(verbose = TRUE, "tune_grid", resamples = vfold_cv(lag12_training, v = 10, repeats = 5, strata = Depth_m), grid = 20)
+doParallel::registerDoParallel(cl)
+randfor_lag24_tuned <- randfor_lag24_models|>
+  workflow_map(verbose = TRUE, "tune_grid", resamples = vfold_cv(lag24_training, v = 10, repeats = 5, strata = Depth_m), grid = 20)
+doParallel::registerDoParallel(cl)
+randfor_lag48_tuned <- randfor_lag48_models|>
+  workflow_map(verbose = TRUE, "tune_grid", resamples = vfold_cv(lag48_training, v = 10, repeats = 5, strata = Depth_m), grid = 20)
+doParallel::registerDoParallel(cl)
+randfor_lag72_tuned <- randfor_lag72_models|>
+  workflow_map(verbose = TRUE, "tune_grid", resamples = vfold_cv(lag72_training, v = 10, repeats = 5, strata = Depth_m), grid = 20)
+
+
+doParallel::registerDoParallel(cl)
+randfor_intlag0_tuned <- randfor_intlag0_models|>
+  workflow_map(verbose = TRUE, "tune_grid", resamples = vfold_cv(lag0_int_training, v = 10, repeats = 5, strata = Depth_m), grid = 20)
+doParallel::registerDoParallel(cl)
+randfor_intlag2_tuned <- randfor_intlag2_models|>
+  workflow_map(verbose = TRUE, "tune_grid", resamples = vfold_cv(lag2_int_training, v = 10, repeats = 5, strata = Depth_m), grid = 20)
+doParallel::registerDoParallel(cl)
+randfor_intlag6_tuned <- randfor_intlag6_models|>
+  workflow_map(verbose = TRUE, "tune_grid", resamples = vfold_cv(lag6_int_training, v = 10, repeats = 5, strata = Depth_m), grid = 20)
+doParallel::registerDoParallel(cl)
+randfor_intlag12_tuned <- randfor_intlag12_models|>
+  workflow_map(verbose = TRUE, "tune_grid", resamples = vfold_cv(lag12_int_training, v = 10, repeats = 5, strata = Depth_m), grid = 20)
+doParallel::registerDoParallel(cl)
+randfor_intlag24_tuned <- randfor_intlag24_models|>
+  workflow_map(verbose = TRUE, "tune_grid", resamples = vfold_cv(lag24_int_training, v = 10, repeats = 5, strata = Depth_m), grid = 20)
+doParallel::registerDoParallel(cl)
+randfor_intlag48_tuned <- randfor_intlag48_models|>
+  workflow_map(verbose = TRUE, "tune_grid", resamples = vfold_cv(lag48_int_training, v = 10, repeats = 5, strata = Depth_m), grid = 20)
+doParallel::registerDoParallel(cl)
+randfor_intlag72_tuned <- randfor_intlag72_models|>
+  workflow_map(verbose = TRUE, "tune_grid", resamples = vfold_cv(lag72_int_training, v = 10, repeats = 5, strata = Depth_m), grid = 20)
+
+
+###
+
+randfor_lag0_wf_best <- randfor_lag0_tuned|>extract_workflow_set_result("lag0_randfor")|>collect_metrics()|>
+    group_by(.metric)|>arrange(mean, .by_group = TRUE)|>ungroup()|>filter(.config == pluck(.config[1]))|>mutate(wflow_id = "lag0_randfor")
+randfor_lag2_wf_best <- randfor_lag2_tuned|>extract_workflow_set_result("lag2_randfor")|>collect_metrics()|>
+  group_by(.metric)|>arrange(mean, .by_group = TRUE)|>ungroup()|>filter(.config == pluck(.config[1]))|>mutate(wflow_id = "lag2_randfor")
+randfor_lag6_wf_best <- randfor_lag6_tuned|>extract_workflow_set_result("lag6_randfor")|>collect_metrics()|>
+  group_by(.metric)|>arrange(mean, .by_group = TRUE)|>ungroup()|>filter(.config == pluck(.config[1]))|>mutate(wflow_id = "lag6_randfor")
+randfor_lag12_wf_best <- randfor_lag12_tuned|>extract_workflow_set_result("lag12_randfor")|>collect_metrics()|>
+  group_by(.metric)|>arrange(mean, .by_group = TRUE)|>ungroup()|>filter(.config == pluck(.config[1]))|>mutate(wflow_id = "lag12_randfor")
+randfor_lag24_wf_best <- randfor_lag24_tuned|>extract_workflow_set_result("lag24_randfor")|>collect_metrics()|>
+  group_by(.metric)|>arrange(mean, .by_group = TRUE)|>ungroup()|>filter(.config == pluck(.config[1]))|>mutate(wflow_id = "lag24_randfor")
+randfor_lag48_wf_best <- randfor_lag48_tuned|>extract_workflow_set_result("lag48_randfor")|>collect_metrics()|>
+  group_by(.metric)|>arrange(mean, .by_group = TRUE)|>ungroup()|>filter(.config == pluck(.config[1]))|>mutate(wflow_id = "lag48_randfor")
+randfor_lag72_wf_best <- randfor_lag72_tuned|>extract_workflow_set_result("lag72_randfor")|>collect_metrics()|>
+  group_by(.metric)|>arrange(mean, .by_group = TRUE)|>ungroup()|>filter(.config == pluck(.config[1]))|>mutate(wflow_id = "lag72_randfor")
+
+
+randfor_intlag0_wf_best <- randfor_intlag0_tuned|>extract_workflow_set_result("intlag0_randfor")|>collect_metrics()|>
+    group_by(.metric)|>arrange(mean, .by_group = TRUE)|>ungroup()|>filter(.config == pluck(.config[1]))|>mutate(wflow_id = "intlag0_randfor")
+randfor_intlag2_wf_best <- randfor_intlag2_tuned|>extract_workflow_set_result("intlag2_randfor")|>collect_metrics()|>
+  group_by(.metric)|>arrange(mean, .by_group = TRUE)|>ungroup()|>filter(.config == pluck(.config[1]))|>mutate(wflow_id = "intlag2_randfor")
+randfor_intlag6_wf_best <- randfor_intlag6_tuned|>extract_workflow_set_result("intlag6_randfor")|>collect_metrics()|>
+  group_by(.metric)|>arrange(mean, .by_group = TRUE)|>ungroup()|>filter(.config == pluck(.config[1]))|>mutate(wflow_id = "intlag6_randfor")
+randfor_intlag12_wf_best <- randfor_intlag12_tuned|>extract_workflow_set_result("intlag12_randfor")|>collect_metrics()|>
+  group_by(.metric)|>arrange(mean, .by_group = TRUE)|>ungroup()|>filter(.config == pluck(.config[1]))|>mutate(wflow_id = "intlag12_randfor")
+randfor_intlag24_wf_best <- randfor_intlag24_tuned|>extract_workflow_set_result("intlag24_randfor")|>collect_metrics()|>
+  group_by(.metric)|>arrange(mean, .by_group = TRUE)|>ungroup()|>filter(.config == pluck(.config[1]))|>mutate(wflow_id = "intlag24_randfor")
+randfor_intlag48_wf_best <- randfor_intlag48_tuned|>extract_workflow_set_result("intlag48_randfor")|>collect_metrics()|>
+  group_by(.metric)|>arrange(mean, .by_group = TRUE)|>ungroup()|>filter(.config == pluck(.config[1]))|>mutate(wflow_id = "intlag48_randfor")
+randfor_intlag72_wf_best <- randfor_intlag72_tuned|>extract_workflow_set_result("intlag72_randfor")|>collect_metrics()|>
+  group_by(.metric)|>arrange(mean, .by_group = TRUE)|>ungroup()|>filter(.config == pluck(.config[1]))|>mutate(wflow_id = "intlag72_randfor")
+
+#combine all the *_tuned workflow_map objects and select best
+randfor_mods <- list(randfor_lag0_tuned,randfor_lag2_tuned,randfor_lag6_tuned,randfor_lag12_tuned,
+     randfor_lag24_tuned,randfor_lag48_tuned,randfor_lag72_tuned,randfor_intlag0_tuned,
+     randfor_intlag2_tuned,randfor_intlag6_tuned,randfor_intlag12_tuned,
+     randfor_intlag24_tuned,randfor_intlag48_tuned,randfor_intlag72_tuned)
+
+saveRDS(randfor_mods, file = "trained_workflows/randfor_mods.Rds")
+saveRDS(randfor_lag0_tuned, file = "trained_workflows/randfor_tuneresults_lag0.Rds")
+randfor_lag0_tuned<-readRDS(here("Predictive_Models/trained_workflows/randfor_mod_lag0.Rds"))
+
+randfor_best_results <- bind_rows(randfor_lag0_wf_best,randfor_lag2_wf_best,randfor_lag6_wf_best,randfor_lag12_wf_best,
+                                  randfor_lag24_wf_best,randfor_lag48_wf_best,randfor_lag72_wf_best,
+                                  randfor_intlag0_wf_best, randfor_intlag2_wf_best,randfor_intlag6_wf_best,
+                                  randfor_intlag12_wf_best, randfor_intlag24_wf_best, randfor_intlag48_wf_best)
+
+
+randfor_predselect_plot <- randfor_best_results|>
+  mutate(.metric = fct_recode(.metric, `R-squared` = "rsq", RMSE = "rmse"),
+         wflow_id = as_factor(wflow_id),
+         wflow_id = fct_reorder2(wflow_id, desc(.metric), desc(mean)))|>
+  ggplot(aes(x = wflow_id, y = mean))+
+  geom_point()+
+  geom_errorbar(aes(ymin = mean-(1.96*std_err), ymax = mean+(1.96*std_err)))+
+  facet_wrap(.~.metric, scales = "free")+
+  xlab("Model ID")+
+  ylab("Metric Score")+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  
+randfor_predselect_plot
+
+randfor_best <- randfor_lag0_tuned |>
+  extract_workflow_set_result("lag0_randfor")|>
+  select_best(metric = "rmse")
+
+randfor_final <- randfor_lag0_tuned|>
+  extract_workflow("lag0_randfor")|>
+  finalize_workflow(randfor_best)
+
+
+
+final_randfor <- last_fit(randfor_final, lag0_split)
+final_vi<-final_randfor|>extract_fit_parsnip()|>vip(num_features = 80)|>pluck("data")
+write_csv(final_vi, "trained_workflows/randfor_lag0_vip_scores.csv")
+saveRDS(final_randfor, "trained_workflows/randfor_fit.Rds")
+#final_randfor <- readRDS("trained_workflows/randfor_fit.Rds")
+```
+
+```{r randfor preds}
+
+blah <- final_randfor|>extract_workflow() #can be used to look at min_n and mtry
+blah2<-blah |> extract_recipe() #checked that #number features in selected recipe >= mtry...
+
+final_randfor_metrics <- final_randfor |> 
+  collect_metrics()
+final_randfor_preds <- final_randfor |>
+  collect_predictions()|>
+  bind_cols(lag0_int_testing|>select(-DO_mg.L))|>
+  filter(!is.na(val_period))
+
+final_randfor_preds|>
+  filter(Depth_m == 1)|>
+ggplot()+
+  geom_point(aes(x = Datetime, y = .pred))+
+  geom_line(aes(x = Datetime, y = DO_mg.L))+
+  ylab("DO (mg/L)")+
+  xlab("Datetime")+
+  facet_wrap(.~val_period, scales = "free")
+
+```
+

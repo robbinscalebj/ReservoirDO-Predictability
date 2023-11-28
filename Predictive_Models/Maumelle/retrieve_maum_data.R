@@ -1,16 +1,9 @@
-#Original depth in feet
-#Do is mg/L
-#Temp is C
-#Datetime is CDT in original, UTC is written to file
-library(tidyverse)
-library(lubridate)
-library(data.table)
-library(here)
+# This script is a function that retrieves data from the Maumelle water quality monitoring buoy
+# #Datetime is CDT in original
 
-here::i_am("Predictive_Models/Maumelle/maumelle_df_retrieve-tidy.R")
+here::i_am("Predictive_Models/Maumelle/retrieve_maum_data.R")
 
-Begin_date = "2021-04-20"
-End_date = "2021-12-31"
+retrieve_maum_data <- function(Begin_date, End_date){
 
 nwis <- read.table(paste0("https://nwis.waterdata.usgs.gov/ar/nwis/uv?cb_00010=on&cb_00010=on&cb_00010=on&cb_00010=on&cb_00010=on&cb_00010=on&cb_00010=on&cb_00010=on&cb_00010=on&cb_00010=on&cb_00300=on&cb_00300=on&cb_00300=on&cb_00300=on&cb_00300=on&cb_00300=on&cb_00300=on&cb_00300=on&cb_00300=on&cb_00300=on&cb_72147=on&cb_72147=on&cb_72147=on&cb_72147=on&cb_72147=on&cb_72147=on&cb_72147=on&cb_72147=on&cb_72147=on&cb_72147=on&format=rdb&site_no=072632995&period=&begin_date=", Begin_date, "&end_date=", End_date), header = TRUE, skip = 46, sep = "\t", na.strings = "NA", dec = ".", strip.white = TRUE)
 
@@ -50,7 +43,7 @@ nwis <- setnames(nwis,
 
 
 # Reshape dataframe 
-nwis2 <- nwis|>
+nwis|>
   group_by(datetime)|>
   summarize(across(everything(), mean))|> #couldn't fix a daylight savings problem on four data points Nov 7th-mean is reasonable solution
   ungroup()|>
@@ -59,16 +52,10 @@ nwis2 <- nwis|>
   pivot_wider(names_from = Var, values_from = value)|>
   mutate(Depth_m = as.numeric(ID)-1,.keep = "unused")|> #depths are the same and correspond to meter intervals
   rename(Temp_C = "Temp", DO_mg.L = "DO")|>
-  mutate(datetime = force_tz(datetime, tzone = "US/Central"),
-                      datetime = with_tz(datetime, tzone = "UTC"))|>
+  #mutate(datetime = force_tz(datetime, tzone = "US/Central"),
+  #       datetime = with_tz(datetime, tzone = "UTC"))|>
   select(-Depth)|>
   mutate(DO_mg.L = ifelse(DO_mg.L <0, 0, DO_mg.L))|> #anoxic values stored as -0.1
   arrange(datetime, Depth_m)
 
-#ggplot(nwis2|>filter(Depth_m == 9), aes(datetime, DO_mg.L))+
- # geom_point()
-
-
-#write data to file
-
-nwis2|>write_csv(here(paste0("Predictive_Models/Maumelle/maumelle_tidied_data-", Begin_date,"_", End_date,".csv")))
+}

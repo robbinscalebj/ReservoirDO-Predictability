@@ -1,0 +1,254 @@
+import pandas as pd
+import tensorflow as tf
+import numpy as np
+import sys
+import seaborn as sns
+import matplotlib.pyplot as plt
+import matplotlib
+matplotlib.use('Agg')
+
+code_dir = "0_process/src/"
+model_dir = "1_model/src/"
+plots_dir = "2_plots/src/plotting_scripts"
+river_dl_dir = "river-dl"
+for p in [code_dir, model_dir, plots_dir, river_dl_dir]:
+    sys.path.append(p)
+
+from preprocess_data import preprocess_data_rnn, create_df_template
+from river_dl.train import train_model
+from river_dl.loss_functions import rmse
+from river_dl.predict import predict
+from river_dl.evaluate import combined_metrics
+from river_dl.postproc_utils import fmt_preds_obs
+from models import LSTMModel, LSTMModel2lyr, LSTMModel4lyr
+import plot_ts
+
+hidden_states = 10
+layers = 1
+
+x_vars = ['doy', 'time_of_day', 'Depth_m', 'WaterTemp_C', 'WWind_m.s', 'SWind_m.s', 'Pressure_hPa', 'AirTemp_C', 'DewPoint_C', 'Cloud_cov_fraction']
+model_types=['rnn']
+
+n_reps = 10
+epochs = 100
+
+learning_rate=0.01
+dropout_rate = 0.15
+n_outputs = 1
+
+
+model = LSTMModel(hidden_states, n_outputs, dropout_rate, dropout_rate)
+
+rule all:
+    input:
+        "1_model/out/rnn/final/rep_0/train_log.png",
+        expand("1_model/out/rnn/final/rep_{reps}/trn_pred_obs.feather",
+                reps=list(range(n_reps))),
+        "1_model/out/rnn/final/lstm_validation_predictions.csv",
+        "1_model/out/exp_overall_metrics.csv",
+        "1_model/out/exp_reach_metrics.csv"
+
+
+def get_input_csv_name(wildcards):
+    if wildcards.partition == 'trn':
+        return "0_process/in/RC_pred_highfreq_training.csv"
+    elif wildcards.partition == 'val':
+        return"0_process/in/RC_pred_validation_for_jeff.csv"
+        
+
+rule input_data_w_depth_m_idx:
+    input:
+        get_input_csv_name
+    output:
+        "0_process/out/highfreq_{partition}_w_depth_idx.csv"
+    run:
+        df = pd.read_csv(input[0], parse_dates=['Datetime'])
+        df['time_of_day'] = df.Datetime.dt.hour * 3600 +\
+                df.Datetime.dt.minute * 60 + df.Datetime.dt.second
+        df['Depth_m_idx'] = df['Depth_m']
+        df['Datetime_orig'] = df['Datetime']
+        df['Datetime'] = df['Datetime'].dt.round('2H')
+        df.to_csv(output[0])
+
+
+def get_val_size(wildcards):
+    if wildcards.partition == 'trn':
+        return 0
+    else:
+        return 1
+
+
+rule prep_input_data:
+    input:
+        "0_process/out/highfreq_{partition}_w_depth_idx.csv"
+    output:
+        "0_process/out/{model_type}/final/{partition}_highfreq_prepped.npz"
+    params: val_size = get_val_size
+    run:
+        preprocess_data_rnn(input[0], x_vars, params.val_size, output[0])
+
+
+# Finetune/train the model on observations
+rule train:
+    input:
+        "0_process/out/{model_type}/final/trn_highfreq_prepped.npz"
+    output:
+        directory("1_model/out/{model_type}/final/rep_{rep}/train_weights/"),
+        "1_model/out/{model_type}/final/rep_{rep}/train_log.csv",
+        "1_model/out/{model_type}/final/rep_{rep}/train_time.txt"
+    run:
+        optimizer = tf.optimizers.Adam(learning_rate=learning_rate) 
+        model.compile(optimizer=optimizer, loss=rmse)
+        data = np.load(input[0], allow_pickle=True)
+        nsegs = len(np.unique(data["ids_trn"]))
+        train_model(model,
+                    x_trn = data['x_trn'],
+                    y_trn = data['y_trn'],
+                    epochs = epochs,
+                    batch_size = 40,
+                    # I need to add a trailing slash here. Otherwise the wgts
+                    # get saved in the "outdir"
+                    weight_dir = output[0] + "/",
+                    log_file = output[1],
+                    time_file = output[2])
+
+
+
+rule make_predictions:
+    input:
+        "0_process/out/{model_type}/final/{partition}_highfreq_prepped.npz",
+        "1_model/out/{model_type}/final/rep_{rep}/train_weights/",
+    output:
+        "1_model/out/{model_type}/final/rep_{rep}/{partition}_preds.feather",
+    run:
+        weight_dir = input[1] + "/"
+        model.load_weights(weight_dir)
+        data = np.load(input[0], allow_pickle=True)
+        predict(model=model,
+                x_data=data[f'x_{wildcards.partition}'],
+                pred_ids=data[f'ids_{wildcards.partition}'],
+                pred_dates=data[f'times_{wildcards.partition}'],
+                y_stds=1,
+                y_means=0,
+                y_vars=['DO_mg.L'],
+                time_idx_name='Datetime',
+                spatial_idx_name='Depth_m_idx',
+                outfile=output[0]
+        )
+
+
+rule average_val_predictions:
+    input:
+        expand("1_model/out/rnn/final/rep_{reps}/val_preds.feather",
+                reps=list(range(n_reps))),
+    output:
+        "1_model/out/rnn/final/avg_val_preds_rounded_dates.feather"
+    run:
+        df_list = []
+        for fname in input:
+            df = pd.read_feather(fname)
+            df_list.append(df)
+        df_combined = pd.concat(df_list, axis=1)
+        do_preds = df_combined['DO_mg.L']
+        assert do_preds.shape[1] == n_reps
+        mean_preds = do_preds.mean(axis=1)
+        # replacing the DO_mg.L of the last reps df (datetime
+        # and depth are the same on each)
+        df['DO_mg.L'] = mean_preds
+        df.to_feather(output[0])
+
+
+rule clean_up_preds:
+    input:
+        "1_model/out/rnn/final/avg_val_preds_rounded_dates.feather",
+        "0_process/out/highfreq_val_w_depth_idx.csv"
+    output:
+        "1_model/out/rnn/final/lstm_validation_predictions.csv",
+    run:
+        df_rounded = pd.read_feather(input[0])
+        df_rounded = df_rounded.rename(columns = {"Depth_m_idx": "Depth_m"})
+        df_rounded = df_rounded.set_index(["Datetime", "Depth_m"])
+        df_orig = pd.read_csv(input[1], parse_dates=['Datetime', 'Datetime_orig'],
+                              index_col=['Datetime', 'Depth_m'])
+        df_rounded = df_rounded.join(df_orig[["Datetime_orig"]])
+        df_rounded = df_rounded.reset_index()
+        df_rounded = df_rounded.rename(columns={
+                                                "Datetime_orig":"Datetime",
+                                                "Datetime": "Datetime_rnd"
+                                                })
+        # I'm getting predictions where we don't have any observations
+        # because I'm interpolating to make the RNN things work
+        df_rounded = df_rounded[["Datetime", "Depth_m", "DO_mg.L"]]
+        df_rounded = df_rounded.dropna()
+        df_rounded.to_csv(output[0], index=False)
+
+
+
+def get_grp_arg(metric_type):
+     if metric_type == 'overall':
+         return None
+     elif metric_type == 'month':
+         return 'month'
+     elif metric_type == 'reach':
+         return 'spatial_ids'
+     elif metric_type == 'month_reach':
+         return ['seg_id_nat', 'month']
+
+
+rule combine_metrics:
+     input:
+        "0_process/out/highfreq_trn_w_depth_idx.csv",
+        "1_model/out/{model_type}/final/rep_{rep}/trn_preds.feather",
+     output:
+        "1_model/out/{model_type}/final/rep_{rep}/{metric_type}_metrics.csv"
+     run:
+        combined_metrics(obs_file=input[0],
+                          pred_data={"train": input[1]},
+                          spatial_idx_name='Depth_m_idx',
+                          group=get_grp_arg(wildcards.metric_type),
+                          time_idx_name='Datetime',
+                          id_dict={"rep_id": wildcards.rep,
+                                   "model": wildcards.model_type},
+                          outfile=output[0])
+
+
+rule exp_metrics:
+     input:
+        expand("1_model/out/{model_type}/final/rep_{rep}/{{metric_type}}_metrics.csv",
+                rep=list(range(n_reps)),
+                model_type=model_types
+        )
+     output:
+          "1_model/out/exp_{metric_type}_metrics.csv"
+     run:
+        all_df = pd.concat([pd.read_csv(metric_file) for metric_file in input])
+        all_df.to_csv(output[0], index=False)
+ 
+
+rule obs_pred_file:
+    input:
+        "1_model/out/{model_type}/final/rep_{rep}/{partition}_preds.feather",
+        "0_process/out/highfreq_trn_w_depth_idx.csv",
+    output:
+        "1_model/out/{model_type}/final/rep_{rep}/{partition}_pred_obs.feather"
+    run:
+        df = fmt_preds_obs(input[0],
+                           input[1],
+                           time_idx_name='Datetime',
+                           spatial_idx_name='Depth_m_idx')
+
+        df['DO_mg.L'].reset_index().to_feather(output[0])
+
+
+rule train_log_plot:
+    input:
+        "1_model/out/{model_type}/final/rep_{rep}/train_log.csv",
+    output:
+        "1_model/out/{model_type}/final/rep_{rep}/train_log.png",
+    run:
+        df = pd.read_csv(input[0])
+        df = df.set_index('epoch')
+        ax = df.plot()
+        plt.savefig(output[0])
+        
+

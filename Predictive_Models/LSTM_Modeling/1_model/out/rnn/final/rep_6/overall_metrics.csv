@@ -1,0 +1,2 @@
+rmse,nse,rmse_top10,rmse_bot10,rmse_logged,mean_bias,mean_bias_top10,mean_bias_bot10,nse_top10,nse_bot10,nse_logged,kge,variable,partition,rep_id,model
+1.076601,0.870783,1.388168,1.020406,inf,-0.027053,-1.047827,0.550655,-2.440045,-2.132345,,0.904604,DO_mg.L,train,6,rnn

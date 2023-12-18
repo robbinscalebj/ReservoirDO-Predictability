@@ -750,8 +750,8 @@ pd <- position_dodge(width=0.4)
 g0 <- ggplot()+ 
   geom_point(data = rmse_schm.df, aes(x = schm.stab_sd, y = rmse, color = depth_cat))+
   geom_line(data=newdat, aes(x=schm.stab_sd,y=pred,color=depth_cat))+ 
-  geom_line(data=newdat, aes(x=schm.stab_sd,y=pred-1.96*SE,color=depth_cat))+
-  geom_line(data=newdat, aes(x=schm.stab_sd,y=pred+1.96*SE,color=depth_cat))+
+  geom_line(data=newdat, aes(x=schm.stab_sd,y=pred-1.96*SE,color=depth_cat), linetype = 2, linewidth = 1)+
+  geom_line(data=newdat, aes(x=schm.stab_sd,y=pred+1.96*SE,color=depth_cat), linetype = 2, linewidth = 1)+
   facet_grid(factor(lake, levels= c("Eagle Mountain", "Richland-Chambers", "Fayetteville", "Maumelle"))~factor(depth_cat, levels= c("Surface", "Middle", "Bottom")), scales = "free")+
   xlab(expression(bold(paste("Mixing (Schmidt Stability ", sigma, ")"))))+
   ylab("RMSE")+

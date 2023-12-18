@@ -1,4 +1,3 @@
-
 #This script combines the Richland-Chambers "long-term" (2000-2020) data sources in proper formatting to be used for predictive modeling.
 #Steps
 #- Read data sources

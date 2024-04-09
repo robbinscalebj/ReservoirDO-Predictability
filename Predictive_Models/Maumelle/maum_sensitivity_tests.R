@@ -23,7 +23,7 @@ mtry <- randfor_best$mtry
 min_n <- randfor_best$min_n
 
 #set model conditions
-rf_model <- rand_forest(mtry = mtry, min_n = min_n, trees = 500)|>set_engine("ranger")
+rf_model <- rand_forest(mtry = mtry, min_n = min_n, trees = 500, mode = "regression")|>set_engine("ranger")
 
 
 ################################# TEST 1 #######################################
@@ -149,7 +149,11 @@ training_data_sw <- lag0_df|>ungroup()|>filter(validation_period == "testing") #
   rf_fit_sw <- parsnip::fit(rf_wflow_sw, training_data_sw)
   
   testing_data_sw <- lag0_df|>ungroup()|>filter(validation_period == "training")
-  rf_predictions_sw <- predict(rf_fit_sw, testing_data_sw)|>bind_cols(testing_data_sw)|>
+  rf_predictions_sw1 <- predict(rf_fit_sw, testing_data_sw)|>bind_cols(testing_data_sw)
+  
+  rf_predictions_sw1|>write_csv(here("Predictive_Models/Maumelle/split_switch_sensitivity_preds.csv"))
+
+  rf_predictions_sw <-  rf_predictions_sw1|>
     group_by(Depth_m)|>
     #group_by(doy)|>summarize(.pred = mean(.pred), DO_mg.L = mean(DO_mg.L))|>select(.pred, DO_mg.L)|>
     rmse(truth = DO_mg.L, estimate = .pred)|>

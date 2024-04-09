@@ -212,7 +212,7 @@ saveRDS(randfor_lag0_tuned, file = here("Predictive_Models/Fayetteville/randfor_
 randfor_best <- randfor_lag0_tuned |> #MAKE SELECTION BASED ON ABOVE PROCEDURE
   extract_workflow_set_result("lag0_randfor")|>
   select_best(metric = "rmse")
-# mtry = 6, min_n = 3
+# mtry = 3, min_n = 3
 
 randfor_final <- randfor_lag0_tuned|>
   extract_workflow("lag0_randfor")|>

@@ -1,6 +1,7 @@
 # Generate sensitivity analysis figures
 
 library(tidyverse)
+library(tidymodels)
 library(here)
 # Retrieve data
 ## RC
@@ -95,8 +96,23 @@ test2.j <- bind_rows(sp_preds_maum, sp_preds_rc, sp_preds_fay,sp_preds_em)|>
 test2.j_rmse <- test2.j |>
   filter(!is.na(depth_cat))|>
   group_by(lake, doy, season, depth_cat)|>
-  rmse(truth = DO_mg.L, estimate = .pred)|>
-  rename(rmse = ".estimate")
+  rmse(truth = DO_mg.L, estimate = .pred)#|>
+  #rename(rmse = ".estimate")
+
+res_rmse_df <- test2.j_rmse|>rename(rmse = ".estimate")|>filter(!is.na(depth_cat))|>
+  mutate(corr_grouping = as_factor(str_c(lake,season,depth_cat,sep = "_")),
+         doy = yday(Datetime),
+         corr_group2 = str_c(lake,depth_cat,val_period, sep="_"))|>
+  filter(doy !=1)|> #gets rid of a couple RC time points that happened to be just after the New Year - artefact of converting to UTC I suppose
+  group_by(lake,season,val_period, depth_cat, doy, corr_grouping, corr_group2)|>
+  summarize(rmse = sqrt(sum(rmse^2)/n()))|>
+  drop_na()
+
+m1 <- nlme::gls(data = test2.j_rmse,rmse ~  season*lake*depth_cat,
+                correlation = corAR1(form = ~doy|corr_group2),
+                weights = varIdent(form = ~1|lake*season*depth_cat), 
+                control = lmeControl(opt = "optim", optimMethod = "L-BFGS-B"))
+
 
 theme_fig4 <- theme_classic()+
   theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 14,face = "bold"),

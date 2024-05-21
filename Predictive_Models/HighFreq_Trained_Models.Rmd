@@ -3,7 +3,7 @@ title: "HighFreq_Trained_Models"
 output: html_document
 date: "2022-10-13"
 ---
-
+This file sets up the tuning/predictor set comparisons for linear regression, lasso regression, and random forests for Richland-Chambers only.
 
 ```{r setup}
 library(tidymodels)
@@ -345,7 +345,7 @@ randfor_predselect_plot
 randfor_best <- randfor_lag0_tuned |>
   extract_workflow_set_result("lag0_randfor")|>
   select_best(metric = "rmse")
-
+#min_n = 4, mtry = 6
 randfor_final <- randfor_lag0_tuned|>
   extract_workflow("lag0_randfor")|>
   finalize_workflow(randfor_best)

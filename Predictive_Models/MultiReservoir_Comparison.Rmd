@@ -461,6 +461,188 @@ res_rmse <- res_preds|>ungroup()|>
 
 ```
 
+### Predicted vs Observed Plots
+```{r theme}
+theme_fig_preds <- theme_bw()+
+    theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 14,face = "bold"),
+          axis.text.y = element_text(size = 14, face = "bold"),
+          axis.title.y = element_text(size = 18, face = "bold"),
+          axis.title.x = element_blank(),
+          strip.text = element_text(size = 15, face = "bold"),
+          legend.text = element_text(size = 20, face = "bold"),
+          legend.title = element_blank(),
+          legend.position = c(0.85,0.8))  
+```
+
+```{r RC}
+##top
+rc_top <- res_preds|>
+  filter(lake == "Richland-Chambers", depth_cat == "Surface")|>
+  ggplot()+
+  geom_point(aes(x = Datetime, y = DO_mg.L))+
+  geom_line(aes(x = Datetime, y = .pred))+
+  facet_wrap(.~val_period, scales = "free")+
+  ylab("Dissolved Oxygen (mg/L)")+
+  ggtitle("Richland-Chambers (Surface)")+
+  theme_fig_preds
+ggsave(plot = rc_top,here("Predictive_Models/figures/FigS5_RC_preds_top.jpeg"), height = 10, width = 12, units = "in")
+##middle
+rc_mid <- res_preds|>
+  filter(lake == "Richland-Chambers", depth_cat == "Middle")|>
+  ggplot()+
+  geom_point(aes(x = Datetime, y = DO_mg.L))+
+  geom_line(aes(x = Datetime, y = .pred))+
+  facet_wrap(.~val_period, scales = "free")+
+  ylab("Dissolved Oxygen (mg/L)")+
+  ggtitle("Richland-Chambers (Middle, 5 m)")+
+  theme_fig_preds
+ggsave(plot = rc_mid,here("Predictive_Models/figures/FigS6_RC_preds_mid.jpeg"), height = 10, width = 12, units = "in")
+##bottom
+rc_bot <- res_preds|>
+  filter(lake == "Richland-Chambers", depth_cat == "Bottom")|>
+  ggplot()+
+  geom_point(aes(x = Datetime, y = DO_mg.L))+
+  geom_line(aes(x = Datetime, y = .pred))+
+  facet_wrap(.~val_period, scales = "free")+
+  ylab("Dissolved Oxygen (mg/L)")+
+  ggtitle("Richland-Chambers (Bottom, 10 m)")+
+  theme_fig_preds
+
+ggsave(plot = rc_bot,here("Predictive_Models/figures/FigS7_RC_preds_bot.jpeg"), height = 10, width = 12, units = "in")
+```
+
+```{r EM}
+
+##top
+EM_top <- res_preds|>
+  filter(lake == "Eagle Mountain", depth_cat == "Surface")|>
+  ggplot()+
+  geom_point(aes(x = Datetime, y = DO_mg.L))+
+  geom_line(aes(x = Datetime, y = .pred))+
+  facet_wrap(.~val_period, scales = "free")+
+  ylab("Dissolved Oxygen (mg/L)")+
+  ggtitle("Eagle Mountain (Surface)")+
+  theme_fig_preds
+ggsave(plot = EM_top,here("Predictive_Models/figures/FigS8_EM_preds_top.jpeg"), height = 10, width = 12, units = "in")
+##middle
+EM_mid <- res_preds|>
+  filter(lake == "Eagle Mountain", depth_cat == "Middle")|>
+  ggplot()+
+  geom_point(aes(x = Datetime, y = DO_mg.L))+
+  geom_line(aes(x = Datetime, y = .pred))+
+  facet_wrap(.~val_period, scales = "free")+
+  ylab("Dissolved Oxygen (mg/L)")+
+  ggtitle("Eagle Mountain (Middle, 5 m)")+
+  theme_fig_preds
+ggsave(plot = EM_mid,here("Predictive_Models/figures/FigS9_EM_preds_mid.jpeg"), height = 10, width = 12, units = "in")
+##bottom
+EM_bot <- res_preds|>
+  filter(lake == "Eagle Mountain", depth_cat == "Bottom")|>
+  ggplot()+
+  geom_point(aes(x = Datetime, y = DO_mg.L))+
+  geom_line(aes(x = Datetime, y = .pred))+
+  facet_wrap(.~val_period, scales = "free")+
+  ylab("Dissolved Oxygen (mg/L)")+
+  ggtitle("Eagle Mountain (Bottom, 10 m)")+
+  theme_fig_preds
+
+ggsave(plot = EM_bot,here("Predictive_Models/figures/FigS10_EM_preds_bot.jpeg"), height = 10, width = 12, units = "in")
+```
+
+```{r Maumelle}
+
+##top
+Maum_top <- res_preds|>
+  filter(lake == "Maumelle", depth_cat == "Surface")|>
+  ggplot()+
+  geom_point(aes(x = Datetime, y = DO_mg.L))+
+  geom_line(aes(x = Datetime, y = .pred))+
+  facet_wrap(.~val_period, scales = "free")+
+  ylab("Dissolved Oxygen (mg/L)")+
+  ggtitle("Maumelle (Surface)")+
+  theme_fig_preds
+ggsave(plot = Maum_top,here("Predictive_Models/figures/FigS11_Maum_preds_top.jpeg"), height = 10, width = 12, units = "in")
+##middle
+Maum_mid <- res_preds|>
+  filter(lake == "Maumelle", depth_cat == "Middle")|>
+  ggplot()+
+  geom_point(aes(x = Datetime, y = DO_mg.L))+
+  geom_line(aes(x = Datetime, y = .pred))+
+  facet_wrap(.~val_period, scales = "free")+
+  ylab("Dissolved Oxygen (mg/L)")+
+  ggtitle("Maumelle (Middle, 5 m)")+
+  theme_fig_preds
+ggsave(plot = Maum_mid,here("Predictive_Models/figures/FigS12_Maum_preds_mid.jpeg"), height = 10, width = 12, units = "in")
+##bottom
+Maum_bot <- res_preds|>
+  filter(lake == "Maumelle", depth_cat == "Bottom")|>
+  ggplot()+
+  geom_point(aes(x = Datetime, y = DO_mg.L))+
+  geom_line(aes(x = Datetime, y = .pred))+
+  facet_wrap(.~val_period, scales = "free")+
+  ylab("Dissolved Oxygen (mg/L)")+
+  ggtitle("Maumelle (Bottom, 9 m)")+
+  theme_fig_preds
+
+ggsave(plot = Maum_bot,here("Predictive_Models/figures/FigS13_Maum_preds_bot.jpeg"), height = 10, width = 12, units = "in")
+```
+
+```{r Fayetteville}
+
+Fay_top <- res_preds|>
+  filter(lake == "Fayetteville", depth_cat == "Surface")|>
+  ggplot()+
+  geom_point(aes(x = Datetime, y = DO_mg.L))+
+  geom_line(aes(x = Datetime, y = .pred))+
+  facet_wrap(.~val_period, scales = "free")+
+  ylab("Dissolved Oxygen (mg/L)")+
+  ggtitle("Fayetteville (Surface)")+
+  theme_fig_preds
+ggsave(plot = Fay_top,here("Predictive_Models/figures/FigS14_Fay_preds_top.jpeg"), height = 10, width = 12, units = "in")
+##middle
+Fay_mid <- res_preds|>
+  filter(lake == "Fayetteville", depth_cat == "Middle")|>
+  ggplot()+
+  geom_point(aes(x = Datetime, y = DO_mg.L))+
+  geom_line(aes(x = Datetime, y = .pred))+
+  facet_wrap(.~val_period, scales = "free")+
+  ylab("Dissolved Oxygen (mg/L)")+
+  ggtitle("Fayetteville (Middle, 5 m)")+
+  theme_fig_preds
+ggsave(plot = Fay_mid,here("Predictive_Models/figures/FigS15_Fay_preds_mid.jpeg"), height = 10, width = 12, units = "in")
+##bottom
+Fay_bot <- res_preds|>
+  filter(lake == "Fayetteville", depth_cat == "Bottom")|>
+  ggplot()+
+  geom_point(aes(x = Datetime, y = DO_mg.L))+
+  geom_line(aes(x = Datetime, y = .pred))+
+  facet_wrap(.~val_period, scales = "free")+
+  ylab("Dissolved Oxygen (mg/L)")+
+  ggtitle("Fayetteville (Bottom, 8.5 m)")+
+  theme_fig_preds
+
+ggsave(plot = Fay_bot,here("Predictive_Models/figures/FigS16_Fay_preds_bot.jpeg"), height = 10, width = 12, units = "in")
+```
+
+```{r Pred vs Observed 1:1 plots}
+
+
+predobs.p<- res_preds|>
+  filter(!is.na(depth_cat))|>
+  ggplot()+
+  geom_point(aes(y = .pred, x = DO_mg.L), alpha =0.1)+
+  geom_abline(slope = 1, color = "red")+
+  facet_grid(lake~depth_cat, scales = "free")+
+  ylab("Predicted DO (mg/L)")+
+  xlab("Observed DO (mg/L)")+
+  theme_fig_preds+theme(axis.title.x = element_text(size = 15, face = "bold"))
+predobs.p
+
+ggsave(plot = predobs.p,here("Predictive_Models/figures/FigS17_predobs.jpeg"), height = 10, width = 12, units = "in")
+
+
+```
+
 ```{r RMSE qualitative comparisons}
 rmse_overall.p <- res_rmse|>
   ggplot(aes(x= .estimate, y = lake, fill = lake))+

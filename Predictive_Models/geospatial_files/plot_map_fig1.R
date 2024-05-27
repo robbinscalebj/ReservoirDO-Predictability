@@ -19,6 +19,8 @@ ar <- tigris::states(cb = TRUE, resolution = "20m", class = "sf")|>
 tx <- tigris::states(cb = TRUE, resolution = "20m", class = "sf")|>
   filter(STUSPS %in% c("TX"))
 
+us <- ggmap::map_data()
+
 #read data
 #sampling locations
 prof_coords <- read_csv(here("Predictive_Models/geospatial_files/profile_coordinates.csv"))
@@ -135,10 +137,24 @@ print(fay_map, vp = fay_vp)
 
 
 
+#create US map with states
+us <- spData::world|>
+  filter(iso_a2=="US")
 
 
+txar_in_us <-tm_shape(us, bbox = st_bbox(c(xmin = -124, xmax = -68, ymin = 25.4, ymax = 49.5), crs = 4326)) +
+  tm_fill()+
+  tm_shape(ar)+
+  tm_polygons(col = "grey")+
+  tm_shape(tx)+
+  tm_polygons(col = "grey")+ 
+  tm_shape(all_coords)+
+  tm_dots(size = 0.8, col = "orange", border.col = "black", border.lwd = 2)+
+  tm_grid(lines = FALSE, labels.size = 1.25)
+txar_in_us
 
-####
+tmap_save(txar_in_us, here("Predictive_Models/figures/txar_in_us_map.png"))
+
 em_sampler<-st_as_sf(namc_gen_df|>filter(collection_date > as_date("2015-01-01")), coords = c("longitude", "latitude"), crs = 4326)
 
 

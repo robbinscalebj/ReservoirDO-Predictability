@@ -1066,10 +1066,10 @@ sm_var5 <- contrast(emmeans(shap.m4, ~variable*season*depth_cat*lake), "pairwise
 theme_fig6 <-   theme_classic()+
     theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 16,face = "bold"),
           axis.text.y = element_text(size = 16, face = "bold"),
-          axis.title.y = element_text(size = 18, face = "bold"),
-          axis.title.x = element_blank(),
+          axis.title.y = element_text(size = 20, face = "bold"),
+          axis.title.x = element_text(size = 20, face = "bold"),
           strip.text = element_text(size = 16, face = "bold"),
-          legend.text = element_text(size = 20, face = "bold"),
+          legend.text = element_text(size = 18, face = "bold"),
           legend.title = element_blank(),
           panel.grid.major = element_blank(), panel.grid.minor = element_blank(),panel.background = element_blank())  
 
@@ -1105,16 +1105,19 @@ seas_shap.p2<-ggplot()+
 seas_shap.p2
 
 seas_shap.p3<-ggplot()+
-  geom_jitter(data = agg_shap2|>filter(variable %in% focal_vars)|>mutate(variable = fct_recode(variable, Wind = "Wind_S&W", `Water Temp` = "WaterTemp_C", Depth = "Depth_m")), aes(x = season, y = SHAP,  shape = lake,fill = lake), alpha = 0.2, position = position_dodge(width = 0.55))+
-  geom_point(data = sm1_em_tidy|>filter(variable %in% focal_vars)|>mutate(variable = fct_recode(variable, Wind = "Wind_S&W", `Water Temp` = "WaterTemp_C", Depth = "Depth_m")), aes(x = season, y = estimate,  shape = lake, fill = lake, group = lake), size = 3, alpha = 1, position = position_dodge(width = 0.55))+
-  geom_errorbar(data = sm1_em_tidy|>filter(variable %in% focal_vars)|>mutate(variable = fct_recode(variable, Wind = "Wind_S&W", `Water Temp` = "WaterTemp_C", Depth = "Depth_m")),aes(x = season, ymin = conf.low, ymax = conf.high, group = lake), color = "black",   width = 0.3, position = position_dodge(width = 0.55))+
+  geom_jitter(data = agg_shap2|>filter(variable %in% focal_vars)|>mutate(variable = fct_recode(variable, Wind = "Wind_S&W", `Water Temp` = "WaterTemp_C", Depth = "Depth_m")), aes(x = season, y = SHAP,  shape = lake,fill = lake), alpha = 0.2, position = position_dodge(width = 0.65), size = 3)+
+  geom_point(data = sm1_em_tidy|>filter(variable %in% focal_vars)|>mutate(variable = fct_recode(variable, Wind = "Wind_S&W", `Water Temp` = "WaterTemp_C", Depth = "Depth_m")), aes(x = season, y = estimate,  shape = lake, fill = lake, group = lake), size = 5, alpha = 1, position = position_dodge(width = 0.65))+
+  geom_errorbar(data = sm1_em_tidy|>filter(variable %in% focal_vars)|>mutate(variable = fct_recode(variable, Wind = "Wind_S&W", `Water Temp` = "WaterTemp_C", Depth = "Depth_m")),aes(x = season, ymin = conf.low, ymax = conf.high, group = lake), color = "black",   width = 0.4, position = position_dodge(width = 0.65))+
   scale_shape_manual(values = c(21,22,23,24))+
   scale_fill_jco()+
+  xlab("Season")+
   ylab("Normalized SHAP (%)")+
   facet_grid(variable~depth_cat, scales = "free")+
   theme_fig6+
+  theme(legend.position = "bottom")+
   NULL
 seas_shap.p3
+
 
 ggsave(plot = seas_shap.p3, here("Predictive_Models/figures/Fig6_SHAP.jpeg"), height = 6, width = 12, units = "in")
 #analysis is abs shap values by season, lake, depth 
